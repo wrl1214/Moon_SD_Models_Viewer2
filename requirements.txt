@@ -1,0 +1,10 @@
+ttkbootstrap
+tkinterdnd2
+pillow
+requests
+beautifulsoup4
+greenlet
+pyee==11.0.0
+playwright
+jaraco.text
+platformdirs

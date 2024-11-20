@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+playwright-browsers/
+
+
+# 项目特定文件
+model_info.json
+*.safetensors
+*.ckpt
+*.bin
+*.pth
+
+
+# 模型文件夹
+checkpoints/
+loras/
+controlnet/
+loras2/
+
+# 系统文件
+.DS_Store
+Thumbs.db
