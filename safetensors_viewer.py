@@ -1,10 +1,10 @@
 """
 Safetensors Viewer
-Version: 1.5.1
+Version: 1.5.2
 """
 
 # 全局常量
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 APP_NAME = "月光AI宝盒-模型管理器"
 APP_TITLE = f"{APP_NAME} v{VERSION}"
 
@@ -38,7 +38,8 @@ import ctypes  # Windows相关
 from playwright.sync_api import sync_playwright  # 浏览器自动化
 from bs4 import NavigableString, Tag  # HTML解析
 from PIL import Image, ImageTk  # 确保导入PIL库
-import glob  # 文件路径匹配
+import queue  # 队列
+import math
 
 def get_base_path():
     return os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
@@ -54,39 +55,44 @@ def get_resource_path(relative_path):
 
 class SafetensorsViewer:
     def __init__(self, master):
-
         # 基础属性初始化
         self.master = master
         self.version = VERSION
 
         # 设置窗口图标
-        # self.master.iconbitmap(get_resource_path('ui\\icon.ico'))  # Windows 使用 .ico 格式的图标
-        # print(get_resource_path('ui\\icon.ico')) 
-        # 使用 iconphoto 方法设置窗口图标
-        self.master.iconphoto(False, PhotoImage(file=get_resource_path('ui\\icon.png')))  # 使用 .png 格式的图标
+        self.master.iconphoto(False, PhotoImage(file=get_resource_path('ui\\icon.png')))
 
-        # 首先初始化 DPI 缩放相关属性
+        # 添加异步加载控制 - 移到前面
+        self.loading_lock = threading.Lock()
+        self.loading_thread = None
+        self.loading_cancelled = False
+        self.is_loading = False
+        self.load_queue = queue.Queue()
+
+        # 添加文件系统缓存 - 移到前面
+        self.fs_cache = FileSystemCache()
+
+        # DPI 缩放相关属性初始化
         try:
-            if os.name == 'nt':  # Windows 系统
+            if os.name == 'nt':
                 awareness = ctypes.c_int()
                 ctypes.windll.shcore.GetProcessDpiAwareness(0, ctypes.byref(awareness))
-                # 获取主显示器的 DPI
                 self.dpi_scale = ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100
             else:
                 self.dpi_scale = 1.0
         except:
             self.dpi_scale = 1.0
 
-        self.window_width = 1240  # 设置窗口宽度
-        self.window_height = 950  # 设置窗口高度
+        # 窗口尺寸设置
+        self.window_width = 1240
+        self.window_height = 950
         
-        # 根据 DPI 缩放调整基础尺寸和字体大小
-        self.base_preview_size = int(450 / (self.dpi_scale ** (7/24)))  # 预览图基础大小反向调整
-        self.base_thumbnail_size = int(60 / (self.dpi_scale ** (1/4)))  # 缩略图基础大小反向调整
-        print(f"预览图基础大小: {self.base_preview_size}, 缩略图基础大小: {self.base_thumbnail_size}")  
+        # 预览图和缩略图尺寸设置
+        self.base_preview_size = int(450 / (self.dpi_scale ** (7/24)))
+        self.base_thumbnail_size = int(60 / (self.dpi_scale ** (1/4)))
         self.thumbnail_size = (self.base_thumbnail_size, self.base_thumbnail_size)
 
-        # 字体基础大小设置
+        # 字体大小设置
         self.large_base_font_size_base = 14 
         self.large_base_title_font_size_base = 16
         self.small_base_font_size_base = 11
@@ -177,7 +183,7 @@ class SafetensorsViewer:
         
         # 添加字体设置
         self.update_fonts()
-
+        
     def get_saved_theme(self):
         """从 model_info.json 获取保存的主题设置"""
         try:
@@ -345,29 +351,43 @@ class SafetensorsViewer:
         return filtered_files
 
     def load_files(self, category, search_term='', sort_method=None):
-        """优化的文件加载"""
+        """优化的文件加载方法"""
         self.clear_file_list()
         
-        # 筛选和排序文件
+        # 获取并筛选文件
         filtered_files = self.filter_files(category, search_term)
         if sort_method:
             filtered_files = self.sort_filtered_files(filtered_files, sort_method)
-            
-        # 加载第一批文件
-        self.load_batch(filtered_files)
+        
+        # 开始分批创建文件条目
+        self.create_file_entries_batch(filtered_files, 0)
         
         # 更新统计信息
         self.update_stats_label()
+
+    def create_file_entries_batch(self, files, start_idx, batch_size=20):
+        """分批创建文件条目"""
+        end_idx = min(start_idx + batch_size, len(files))
+        current_batch = files[start_idx:end_idx]
         
-        # 更新滚动区域
-        self.canvas.update_idletasks()
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        self.canvas.yview_moveto(0)
+        # 确保没有重复的文件条目
+        for file, path in current_batch:
+            full_path = os.path.join(path, file)
+            if full_path not in self.file_frames:
+                self.create_file_entry(file, path)
         
-        # 选择第一个文件（除非是收藏筛选
-        if filtered_files and self.current_subfolder != "收藏":
-            first_file = filtered_files[0]
-            self.select_file(first_file[0], first_file[1])
+        # 如果还有更多文件，安排下一批
+        if end_idx < len(files):
+            self.master.after(10, lambda: self.create_file_entries_batch(files, end_idx))
+        else:
+            # 所有批次处理完成
+            self.canvas.update_idletasks()
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            
+            # 选择第一个文件（如果有）
+            if files and not self.current_file:
+                first_file = files[0]
+                self.select_file(first_file[0], first_file[1])
 
     def setup_ui(self):
         self.master.title(f"月光AI宝盒-模型管理器 v{self.version}")
@@ -1945,6 +1965,14 @@ v{VERSION} 更新内容：
         # 重置当前文件和批次
         self.current_file = None
         self.current_batch = 0
+        
+        # 清空滚动框架中的所有内容
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+        
+        # 重置滚动区域
+        self.canvas.configure(scrollregion=(0, 0, 0, 0))
+        self.canvas.yview_moveto(0)
 
     def load_files_direct(self, category, search_term='', sort_method=None):
         """直接加载所有文件，不使用批量加载"""
@@ -1984,12 +2012,47 @@ v{VERSION} 更新内容：
 
     def on_category_selected(self, event):
         """类别选择改变时的处理"""
-        self.search_var.set('')  # 清空搜索框
-        self.update_subfolder_buttons(self.category_combobox.get())
-        self.load_files(self.category_combobox.get(), sort_method=self.current_sort)
+        # 保存当前状态
+        current_sort = self.current_sort
+        
+        # 清空搜索框和子文件夹选择
+        self.search_var.set('')
+        self.current_subfolder = None
+        
+        # 清空文件列表和UI
+        self.clear_file_list()
+        
+        # 重置所有子文件夹按钮状态
+        for button in self.subfolder_buttons.values():
+            button.configure(style='primary.TButton')
+        
+        # 获取新选择的类别
+        new_category = self.category_combobox.get()
+        
+        # 更新子文件夹按钮
+        self.update_subfolder_buttons(new_category)
+        
+        # 重新筛选当前类别的文件
+        filtered_files = [
+            (file, path) for file, path in self.all_files
+            if path.startswith(new_category)
+        ]
+        
+        # 应用排序
+        sorted_files = self.sort_filtered_files(filtered_files, current_sort)
+        
+        # 重置批次计数器
+        self.current_batch = 0
+        
+        # 创建文件条目
+        self.create_file_entries_batch(sorted_files, 0)
+        
+        # 更新统计信息
+        self.update_stats_label()
+        
+        # 重新绑定事件
         self.rebind_paste_event()
         self.search_entry.focus_set()
-
 
     def load_preview(self, file_name, relative_path):
         """加载预览图"""
@@ -2567,68 +2630,67 @@ v{VERSION} 更新内容：
         self.show_popup_message("触发词已复制")
 
     def refresh_files(self):
-        """刷新文件列表和类别"""
-        # 先保存当前模型信息
-        if self.current_file:
-            self.auto_save_changes()
-        
-        # 保存当前选择的类别和子文件夹
+        """优化的刷新方法"""
+        # 保存当前状态
         current_category = self.category_combobox.get()
-        current_subfolder = self.current_subfolder  # 保存当前的快速筛选状态
-        
-        # 清空搜索框
-        self.search_var.set('')
+        current_subfolder = self.current_subfolder
+        current_file = self.current_file
         
         # 清除所有缓存
-        self.load_thumbnail.cache_clear()
+        self.fs_cache.clear()
+        try:
+            self.load_thumbnail.cache_clear()
+        except AttributeError:
+            original_load_thumbnail = self.load_thumbnail
+            self.load_thumbnail = lru_cache(maxsize=100)(original_load_thumbnail)
+        
         self._file_paths_cache.clear()
-        self._preview_exists_cache.clear()  # 确保清除预览图存在状态的缓存
+        self._preview_exists_cache.clear()
+        
+        # 清空文件列表和UI
+        self.clear_file_list()
+        self.all_files = []  # 确保清空文件列表
         
         # 重新加载类别
         self.categories = []
         self.load_categories()
         
-        # 如果之前选择的类别仍然存在，则保持选择
-        if current_category in self.categories:
-            self.category_combobox.set(current_category)
-            # 更新快速筛选按钮
-            self.update_subfolder_buttons(current_category)
-            
-            # 检查之前的子文件夹是否仍然存在
-            if current_subfolder:
-                subfolders = self.get_subfolders(current_category)
-                if current_subfolder in subfolders:
-                    self.current_subfolder = current_subfolder
-                    # 更新按钮选中状态
-                    for button_text, button in self.subfolder_buttons.items():
-                        if button_text == current_subfolder:
-                            button.configure(style='secondary.TButton')  # 选中状态
-                        else:
-                            button.configure(style='primary.TButton')  # 未选中状态
-                else:
-                    # 子文件夹不存在了，清除快速筛选状态
-                    self.current_subfolder = None
-                    # 重置所有按钮状态
-                    for button in self.subfolder_buttons.values():
-                        button.configure(style='primary.TButton')
-            
-            # 使用当前排序方式加载新文件
-            self.load_files(current_category, sort_method=self.current_sort)
+        # 异步加载文件
+        def on_refresh_complete():
+            try:
+                # 恢复之前的选择
+                if current_category in self.categories:
+                    self.category_combobox.set(current_category)
+                    self.update_subfolder_buttons(current_category)
+                    
+                    if current_subfolder:
+                        self.current_subfolder = current_subfolder
+                        if current_subfolder in self.subfolder_buttons:
+                            self.subfolder_buttons[current_subfolder].configure(style='secondary.TButton')
+                    
+                    # 使用新的文件列表加载文件
+                    self.load_files(current_category, self.search_var.get(), self.current_sort)
+                    
+                    # 如果之前有选中的文件，尝试重新选中
+                    if current_file:
+                        file_name = os.path.basename(current_file)
+                        relative_path = os.path.dirname(current_file)
+                        self.select_file(file_name, relative_path)
+                
+                self.show_popup_message("文件列表已刷新")
+            except Exception as e:
+                logging.error(f"Error in on_refresh_complete: {str(e)}")
+        
+        # 开始异步加载
+        self.load_all_files()
+        self.master.after(100, lambda: self.check_loading_complete(on_refresh_complete))
+
+    def check_loading_complete(self, callback):
+        """检查加载是否完成"""
+        if not self.loading_thread or not self.loading_thread.is_alive():
+            callback()
         else:
-            # 如果之前的类别不存在了，选择第一个可用的类别
-            if self.categories:
-                self.category_combobox.set(self.categories[0])
-                # 更新快速筛选按钮
-                self.update_subfolder_buttons(self.categories[0])
-                # 清除快速筛选状态
-                self.current_subfolder = None
-                # 使用当前排序方式加载新文件
-                self.load_files(self.categories[0], sort_method=self.current_sort)
-        
-        self.show_popup_message("文件列表已刷新")
-        
-        # 重新绑定粘贴事件
-        self.rebind_paste_event()
+            self.master.after(100, lambda: self.check_loading_complete(callback))
 
     def show_full_description(self):
         """显示完整的模型描述（可编辑）"""
@@ -2897,34 +2959,31 @@ v{VERSION} 更新内容：
             widget.bind("<Enter>", lambda e: e.widget.configure(cursor="hand2"))
             widget.bind("<Leave>", lambda e: e.widget.configure(cursor=""))
 
-    @lru_cache(maxsize=100)
+    @lru_cache(maxsize=100)  # 添加缓存装饰器
     def load_thumbnail(self, file_name, relative_path, size=None, crop=True):
-        """
-        加载缩略图
-        Args:
-            file_name: 文件名
-            relative_path: 相对路径
-            size: 缩略图大小，如果为None则使用全局设置
-            crop: 是否裁剪图片
-        Returns:
-            ImageTk.PhotoImage 对象或 None
-        """
-        # 使用全局缩略图尺寸设置
+        """优化的缩略图加载"""
         if size is None:
             size = self.thumbnail_size
         
+        # 使用缓存的文件系统操作
         folder_path = os.path.join(BASE_PATH, relative_path)
-        # 查找模型对应的预览图
-        for ext in self.supported_image_extensions:
-            image_path = os.path.join(folder_path, os.path.splitext(file_name)[0] + ext)
-            if os.path.exists(image_path):
-                return self.process_image(image_path, size, crop)
+        image_path = None
         
-        # 如果没有找到预览图，使用默认图片
-        null_image_path = get_resource_path('ui/null.png')
-        if os.path.exists(null_image_path):
-            return self.process_image(null_image_path, size, crop)
-        return None
+        # 检查预览图
+        for ext in self.supported_image_extensions:
+            test_path = os.path.join(folder_path, os.path.splitext(file_name)[0] + ext)
+            if self.fs_cache.get_file_info(test_path):
+                image_path = test_path
+                break
+        
+        if not image_path:
+            # 使用默认图片
+            null_image_path = get_resource_path('ui/null.png')
+            if os.path.exists(null_image_path):
+                return self.process_image(null_image_path, size, crop)
+            return None
+        
+        return self.process_image(image_path, size, crop)
 
     def process_image(self, image_path, size, crop=True):
         try:
@@ -3626,8 +3685,21 @@ v{VERSION} 更新内容：
             self.show_popup_message("请先选择一个模型文件")
             return
 
-        # 保存当前选中的文信息
-        current_file = self.current_file
+        # 确保收藏图标已加载
+        if self.favorite_icon is None:
+            try:
+                favorite_image = Image.open(get_resource_path('ui/favorite.png'))
+                if favorite_image.mode != 'RGBA':
+                    favorite_image = favorite_image.convert('RGBA')
+                # 调整收藏图标大小为缩略图的1/3
+                favorite_icon_size = (self.thumbnail_size[0] // 3, self.thumbnail_size[1] // 3)
+                favorite_image = favorite_image.resize(favorite_icon_size, Image.LANCZOS)
+                background = Image.new('RGBA', favorite_image.size, (0, 0, 0, 0))
+                background.paste(favorite_image, (0, 0), favorite_image)
+                self.favorite_icon = ImageTk.PhotoImage(background)
+            except Exception as e:
+                logging.error(f"Error loading favorite icon: {str(e)}")
+                self.favorite_icon = None
 
         # 读取现有的模型信息
         info_file = 'model_info.json'
@@ -3646,7 +3718,7 @@ v{VERSION} 更新内容：
         is_favorite = not current_info.get('is_favorite', False)
         current_info['is_favorite'] = is_favorite
         
-        # 更新模信息
+        # 更新模型信息
         all_info[self.current_file] = current_info
         
         # 保存到文件
@@ -3669,8 +3741,36 @@ v{VERSION} 更新内容：
         # 更新按钮文本
         self.update_favorite_button_text()
         
-        # 刷新当前文件的显示，保持当前选中的文件
-        self.refresh_current_file_display(keep_selection=True, selected_file=current_file)
+        # 更新当前文件的收藏图标
+        if self.current_file in self.file_frames and self.favorite_icon:
+            frame, _, _ = self.file_frames[self.current_file]
+            # 查找缩略图标签
+            for child in frame.winfo_children():
+                if isinstance(child, ttk.Frame):  # 找到内容框架
+                    for content_child in child.winfo_children():
+                        if isinstance(content_child, ttk.Frame):  # 找到左侧容器
+                            for label in content_child.winfo_children():
+                                if isinstance(label, ttk.Label) and hasattr(label, 'image'):
+                                    # 移除现有的收藏图标（如果有）
+                                    for widget in label.winfo_children():
+                                        if isinstance(widget, tk.Label):
+                                            widget.destroy()
+                                    
+                                    # 如果是收藏状态，添加收藏图标
+                                    if is_favorite:
+                                        favorite_label = tk.Label(
+                                            label,
+                                            image=self.favorite_icon,
+                                            bg=self.style.colors.bg,
+                                            bd=0,
+                                            highlightthickness=0
+                                        )
+                                        favorite_label.place(x=2, y=2)
+                                        favorite_label.bind(
+                                            "<Button-1>",
+                                            lambda e, fn=os.path.basename(self.current_file),
+                                            rp=os.path.dirname(self.current_file): self.select_file(fn, rp)
+                                        )
 
     def load_favorites(self):
         """从 model_info.json 中加载收藏信息"""
@@ -3794,7 +3894,7 @@ v{VERSION} 更新内容：
             self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
     def load_categories(self):
-        """加载所有类别并设置默认选项"""
+        """加载���有类别并设置默认选项"""
         # 获取所有文件夹
         all_dirs = [d for d in os.listdir(BASE_PATH) 
                     if os.path.isdir(os.path.join(BASE_PATH, d)) and d not in ['ui']]
@@ -3842,23 +3942,67 @@ v{VERSION} 更新内容：
         return False
 
     def load_all_files(self):
-        """预加载所文信息"""
-        self.all_files = []
-        for category in self.categories:
-            category_path = os.path.join(BASE_PATH, category)
-            self.recursive_load_all_files(category_path, category)
+        """异步加载所有文件"""
+        if self.loading_thread and self.loading_thread.is_alive():
+            self.loading_cancelled = True
+            self.loading_thread.join()
         
-        # 加载完成立即进行排序
-        self.all_files = self.sort_filtered_files(self.all_files, self.current_sort)
+        self.loading_cancelled = False
+        # 确保清空文件列表
+        self.all_files = []
+        
+        def load_files_thread():
+            with self.loading_lock:
+                try:
+                    temp_files = []  # 使用临时列表存储文件
+                    for category in self.categories:
+                        if self.loading_cancelled:
+                            return
+                            
+                        category_path = os.path.join(BASE_PATH, category)
+                        self.recursive_load_all_files_to_list(category_path, category, temp_files)
+                    
+                    # 加载完成后，一次性更新 all_files
+                    if not self.loading_cancelled:
+                        self.all_files = list(set(temp_files))  # 使用 set 去重
+                        # 加载完成后在主线程中更新UI
+                        self.master.after(0, self.on_files_loaded)
+                except Exception as e:
+                    logging.error(f"Error in load_files_thread: {str(e)}")
+        
+        self.loading_thread = threading.Thread(target=load_files_thread)
+        self.loading_thread.daemon = True
+        self.loading_thread.start()
 
-    def recursive_load_all_files(self, path, relative_path):
-        """递归加载指定路径下的所有文件"""
-        for item in os.listdir(path):
-            item_path = os.path.join(path, item)
-            if os.path.isdir(item_path):
-                self.recursive_load_all_files(item_path, os.path.join(relative_path, item))
-            elif item.endswith(self.supported_model_extensions):
-                self.all_files.append((item, relative_path))
+    def recursive_load_all_files_to_list(self, path, relative_path, file_list):
+        """递归加载文件到指定列表（使用缓存）"""
+        try:
+            items = self.fs_cache.get_dir_content(path)
+            for item in items:
+                if self.loading_cancelled:
+                    return
+                        
+                item_path = os.path.join(path, item)
+                if os.path.isdir(item_path):
+                    self.recursive_load_all_files_to_list(
+                        item_path, 
+                        os.path.join(relative_path, item),
+                        file_list
+                    )
+                elif item.endswith(self.supported_model_extensions):
+                    file_list.append((item, relative_path))
+        except Exception as e:
+            logging.error(f"Error loading files from {path}: {str(e)}")
+
+    def on_files_loaded(self):
+        """文件加载完成后的处理"""
+        if hasattr(self, 'current_sort'):
+            self.all_files = self.sort_filtered_files(self.all_files, self.current_sort)
+        
+        # 刷新当前显示
+        if hasattr(self, 'category_combobox'):
+            category = self.category_combobox.get()
+            self.load_files(category, self.search_var.get(), self.current_sort)
 
     def add_favorite_field_to_model_info(self):
         """为所有模型信息添加收藏字段"""
@@ -5199,7 +5343,6 @@ https://pan.quark.cn/s/75450b122a53"""
             self.show_popup_message(f"复制模型时发生错误：{str(e)}")
 
 
-
     def show_cf_node_menu(self):
         """显示CF节点选择菜单"""
         if not self.current_file:
@@ -6414,6 +6557,53 @@ https://pan.quark.cn/s/75450b122a53"""
             self.refresh_files()
         except Exception as e:
             self.show_popup_message(f"删除预览图失败：{str(e)}")
+
+class FileSystemCache:
+    def __init__(self):
+        self.file_info_cache = {}
+        self.dir_content_cache = {}
+        self.cache_time = {}
+        self.cache_lifetime = 300  # 缓存有效期(秒)
+
+    def get_file_info(self, file_path):
+        current_time = time.time()
+        if file_path in self.file_info_cache:
+            cache_time = self.cache_time.get(file_path, 0)
+            if current_time - cache_time < self.cache_lifetime:
+                return self.file_info_cache[file_path]
+
+        try:
+            stat = os.stat(file_path)
+            info = {
+                'size': stat.st_size,
+                'mtime': stat.st_mtime,
+                'exists': True
+            }
+            self.file_info_cache[file_path] = info
+            self.cache_time[file_path] = current_time
+            return info
+        except:
+            return None
+
+    def get_dir_content(self, dir_path):
+        current_time = time.time()
+        if dir_path in self.dir_content_cache:
+            cache_time = self.cache_time.get(dir_path, 0)
+            if current_time - cache_time < self.cache_lifetime:
+                return self.dir_content_cache[dir_path]
+
+        try:
+            content = os.listdir(dir_path)
+            self.dir_content_cache[dir_path] = content
+            self.cache_time[dir_path] = current_time
+            return content
+        except:
+            return []
+
+    def clear(self):
+        self.file_info_cache.clear()
+        self.dir_content_cache.clear()
+        self.cache_time.clear()
 
 if __name__ == "__main__":
     import os

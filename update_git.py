@@ -52,6 +52,12 @@ def commit_changes():
     """提交更改"""
     print("\n准备提交更改...")
     
+    # 获取标签输入
+    tag_version = input("请输入版本标签(例如 v1.0.0，直接回车跳过)：").strip()
+    
+    # 获取提交信息
+    commit_message = input("请输入提交信息(默认: Update)：").strip() or "Update"
+    
     files_to_update = [
         'ui',
         '运行查看器.bat',
@@ -72,13 +78,21 @@ def commit_changes():
         print(f"已添加文件：{file}")
     
     # 创建提交
-    commit_message = "Initial commit - Project setup"
     success, output = run_git_command(f'git commit -m "{commit_message}"')
     if not success:
         print(f"提交更改失败：\n{output}")
         return False
     
     print(f"已创建提交：{commit_message}")
+    
+    # 如果提供了标签，创建并推送标签
+    if tag_version:
+        success, output = run_git_command(f'git tag {tag_version}')
+        if not success:
+            print(f"创建标签失败：\n{output}")
+            return False
+        print(f"已创建标签：{tag_version}")
+    
     return True
 
 def pull_changes():
@@ -127,6 +141,15 @@ def push_changes():
         success, output = run_git_command(f'git push -u origin {current_branch}')
         if success:
             print(f"成功推送到远程仓库的 {current_branch} 分支！")
+            # 推送成功后，检查是否有标签需要推送
+            success, tags = run_git_command('git tag --points-at HEAD')
+            if success and tags.strip():
+                print("\n检测到新标签，准备推送标签...")
+                success, output = run_git_command('git push origin --tags')
+                if not success:
+                    print(f"推送标签失败：\n{output}")
+                else:
+                    print("标签推送成功！")
             return True
         else:
             print(f"推送失败：\n{output}")
@@ -139,6 +162,15 @@ def push_changes():
             print(f"强制推送失败：\n{output}")
             return False
         print("强制推送成功！")
+        # 推送成功后，检查是否有标签需要推送
+        success, tags = run_git_command('git tag --points-at HEAD')
+        if success and tags.strip():
+            print("\n检测到新标签，准备推送标签...")
+            success, output = run_git_command('git push origin --tags')
+            if not success:
+                print(f"推送标签失败：\n{output}")
+            else:
+                print("标签推送成功！")
         return True
     
     return False
