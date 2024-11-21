@@ -4,6 +4,7 @@ import subprocess
 import site
 import glob
 import re
+import platform
 
 def get_version():
     """从 safetensors_viewer.py 中读取版本号"""
@@ -38,6 +39,43 @@ def find_tkdnd():
             return tkdnd_path
     return None
 
+def find_playwright_browser():
+    """查找 playwright 的 firefox 浏览器路径"""
+    try:
+        # 使用 playwright install 命令安装浏览器
+        subprocess.run(['playwright', 'install', 'firefox'], check=True)
+        
+        # 获取浏览器路径
+        if platform.system() == 'Windows':
+            home = os.path.expanduser('~')
+            base_path = os.path.join(
+                home, 
+                'AppData', 
+                'Local', 
+                'ms-playwright'
+            )
+            
+            # 查找 firefox-* 目录
+            firefox_pattern = os.path.join(base_path, 'firefox-*')
+            firefox_dirs = glob.glob(firefox_pattern)
+            
+            if firefox_dirs:
+                firefox_path = firefox_dirs[0]
+                if os.path.exists(firefox_path):
+                    print(f"找到 Firefox 路径: {firefox_path}")
+                    
+                    # 检查必要的文件和目录
+                    firefox_exe = os.path.join(firefox_path, 'firefox', 'firefox.exe')
+                    if not os.path.exists(firefox_exe):
+                        print(f"警告：找不到 firefox.exe: {firefox_exe}")
+                        return None
+                    
+                    return firefox_path
+                
+    except Exception as e:
+        print(f"获取 playwright firefox 路径时发生错误: {e}")
+    return None
+
 def build():
     # 获取版本号
     version = get_version()
@@ -49,14 +87,15 @@ def build():
     # 安装 requirements.txt 中的所有依赖
     install_requirements()
     
-    # 获取 Firefox 浏览器路径
-    firefox_base = os.path.join(os.path.dirname(__file__), 'playwright-browsers')
-    firefox_path = glob.glob(os.path.join(firefox_base, 'firefox-*', 'firefox'))[0]  # 获取具体路径
-    
     # 获取 tkdnd 路径
     tkdnd_path = find_tkdnd()
     if not tkdnd_path:
         raise RuntimeError("Could not find tkdnd directory")
+        
+    # 获取 playwright firefox 浏览器路径
+    browser_path = find_playwright_browser()
+    if not browser_path:
+        raise RuntimeError("Could not find playwright firefox browser")
     
     # PyInstaller 命令
     cmd = [
@@ -66,18 +105,16 @@ def build():
         f'--name={app_name}',
         '--icon=ui/icon.ico',
         '--add-data=ui;ui',
-        f'--add-data={firefox_path};playwright-browsers/firefox',  # 使用具体路径
         f'--add-data={tkdnd_path};tkdnd',
+        f'--add-data={browser_path};firefox',  # 这里会把整个 firefox-* 目录复制到 firefox 目录下
         '--hidden-import=tkinter',
         '--hidden-import=tkinter.ttk',
         '--hidden-import=PIL',
         '--hidden-import=ttkbootstrap',
         '--hidden-import=tkinterdnd2',
-        '--collect-data=tkinterdnd2',
         '--hidden-import=playwright',
         '--hidden-import=playwright.sync_api',
-        '--hidden-import=playwright._impl._api_types',
-        '--hidden-import=playwright._impl.sync_api',
+        '--collect-data=tkinterdnd2',
         '--collect-data=playwright',
         '--collect-all=playwright',
         '--noconsole',

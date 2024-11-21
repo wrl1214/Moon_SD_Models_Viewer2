@@ -38,8 +38,7 @@ import ctypes  # Windows相关
 from playwright.sync_api import sync_playwright  # 浏览器自动化
 from bs4 import NavigableString, Tag  # HTML解析
 from PIL import Image, ImageTk  # 确保导入PIL库
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+import glob  # 文件路径匹配
 
 def get_base_path():
     return os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
@@ -65,7 +64,6 @@ class SafetensorsViewer:
         # print(get_resource_path('ui\\icon.ico')) 
         # 使用 iconphoto 方法设置窗口图标
         self.master.iconphoto(False, PhotoImage(file=get_resource_path('ui\\icon.png')))  # 使用 .png 格式的图标
-        
 
         # 首先初始化 DPI 缩放相关属性
         try:
@@ -78,8 +76,6 @@ class SafetensorsViewer:
                 self.dpi_scale = 1.0
         except:
             self.dpi_scale = 1.0
-
-
 
         self.window_width = 1240  # 设置窗口宽度
         self.window_height = 950  # 设置窗口高度
@@ -181,31 +177,6 @@ class SafetensorsViewer:
         
         # 添加字体设置
         self.update_fonts()
-
-        # 设置 Playwright 浏览器路径
-        try:
-            if getattr(sys, 'frozen', False):
-                # 打包环境
-                browsers_path = os.path.join(sys._MEIPASS, 'playwright-browsers')
-                # 修改 Playwright 的默认浏览器路径
-                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
-                # 显式设置 Firefox 路径
-                os.environ["PLAYWRIGHT_FIREFOX_PATH"] = os.path.join(browsers_path, 'firefox', 'firefox.exe')
-            else:
-                # 开发环境
-                browsers_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'playwright-browsers')
-                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
-                os.environ["PLAYWRIGHT_FIREFOX_PATH"] = os.path.join(browsers_path, 'firefox-1313', 'firefox', 'firefox.exe')
-            
-            print(f"Playwright browsers path: {os.environ['PLAYWRIGHT_BROWSERS_PATH']}")
-            print(f"Playwright Firefox path: {os.environ['PLAYWRIGHT_FIREFOX_PATH']}")
-            print(f"Firefox executable exists: {os.path.exists(os.environ['PLAYWRIGHT_FIREFOX_PATH'])}")
-            
-        except Exception as e:
-            print(f"设置浏览器路径时出错: {str(e)}")
-            # 使用默认路径
-            browsers_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'playwright-browsers')
-            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = browsers_path
 
     def get_saved_theme(self):
         """从 model_info.json 获取保存的主题设置"""
@@ -2771,7 +2742,7 @@ v{VERSION} 更新内容：
         popup = tk.Toplevel(self.master)
         popup.title("")
         # 增加窗口大小以适应外描边
-        popup.geometry("800x600")  # 220+6 x 60+6 来适应3像素的边框
+        popup.geometry("326x106")  # 220+6 x 60+6 来适应3像素的边框
         popup.resizable(False, False)
         
         # 使用当前主题的颜色
@@ -4283,6 +4254,7 @@ https://pan.quark.cn/s/75450b122a53"""
         except Exception as e:
             self.show_popup_message(f"打开搜索页面失败：{str(e)}")
 
+
     def fetch_from_liblib(self):
         """从Liblib抓取模型信息"""
         if not self.current_file:
@@ -4330,20 +4302,36 @@ https://pan.quark.cn/s/75450b122a53"""
         def update_status(text):
             status_label.config(text=text)
             progress_window.update()
+
+        def get_browser_path():
+            """获取 Firefox 浏览器路径"""
+            try:
+                if getattr(sys, 'frozen', False):
+                    # 打包环境
+                    base_dir = sys._MEIPASS
+                    firefox_path = os.path.join(base_dir, 'firefox', 'firefox', 'firefox.exe')  # 注意这里添加了两次 firefox
+                    if os.path.exists(firefox_path):
+                        print(f"使用打包的Firefox: {firefox_path}")
+                        return firefox_path
+                
+                # 开发环境
+                return None
+            except Exception as e:
+                logging.error(f"获取浏览器路径失败：{str(e)}")
+            return None     
         
         try:
             update_status("正在从Liblib获取模型信息...")
             
             with sync_playwright() as p:
                 browser = None
+                browser_path = get_browser_path()
+                print(f"浏览器路径: {browser_path}")
                 try:
-                    # 获取 Firefox 可执行文件路径
-                    firefox_exe = os.environ.get("PLAYWRIGHT_FIREFOX_PATH")
-                    
                     # 启动浏览器时显式指定可执行文件路径
                     browser = p.firefox.launch(
                         headless=True,
-                        executable_path=firefox_exe
+                        executable_path = browser_path # 指定浏览器路径
                     )
                     page = browser.new_page()
                     
@@ -4486,20 +4474,15 @@ https://pan.quark.cn/s/75450b122a53"""
                     progress_window.destroy()
                     self.show_popup_message("信息抓取成功")
                     
-                except Exception as e:
-                    return[]
-                    # if "TimeoutError" in str(e):
-                    #     update_status("等待页面加载超时...")
-                    #     progress_window.after(1000, progress_window.destroy)
-                    #     self.show_popup_message("页面加载超时，请检查网络连接或稍后重试")
-                    # else:
-                    #     raise e
+                except Exception as e:                    
+                    if "TimeoutError" in str(e):
+                        update_status("等待页面加载超时...")
+                        progress_window.after(1000, progress_window.destroy)
+                        self.show_popup_message("页面加载超时，请检查网络连接或稍后重试")
+                    else:
+                        raise e
                 finally:
-                    try:
-                        if 'browser' in locals():
-                            browser.close()
-                    except:
-                        pass
+                    browser.close()
                     
         except Exception as e:
             progress_window.destroy()
@@ -4564,7 +4547,35 @@ https://pan.quark.cn/s/75450b122a53"""
             hash_value = self.model_hash.get()
             if not hash_value:
                 full_path = os.path.join(BASE_PATH, self.current_file)
-                hash_value = self.calculate_file_hash(full_path)
+                file_size = os.path.getsize(full_path)
+                
+                # 使用 SHA-256 算法
+                sha256_hash = hashlib.sha256()
+                
+                # 已读取的字节数
+                bytes_read = 0
+                last_update_time = time.time()
+                update_interval = 0.1  # 每0.1秒更新一次界面
+                
+                # 以二进制模式读取文件
+                with open(full_path, "rb") as f:
+                    while True:
+                        # 读取数据块
+                        chunk = f.read(8192)
+                        if not chunk:
+                            break
+                            
+                        sha256_hash.update(chunk)
+                        bytes_read += len(chunk)
+                        
+                        # 更新进度
+                        current_time = time.time()
+                        if current_time - last_update_time >= update_interval:
+                            progress = (bytes_read / file_size) * 100
+                            update_status(f"正在计算哈希值... {progress:.1f}%")
+                            last_update_time = current_time
+                
+                hash_value = sha256_hash.hexdigest()
                 if not hash_value:
                     raise Exception("无法计算模型哈希值")
                 
@@ -5837,18 +5848,34 @@ https://pan.quark.cn/s/75450b122a53"""
                             else:
                                 need_preview = True
                             
+                            def get_browser_path():
+                                """获取 Firefox 浏览器路径"""
+                                try:
+                                    if getattr(sys, 'frozen', False):
+                                        # 打包环境
+                                        base_dir = sys._MEIPASS
+                                        firefox_path = os.path.join(base_dir, 'firefox', 'firefox', 'firefox.exe')  # 注意这里添加了两次 firefox
+                                        if os.path.exists(firefox_path):
+                                            print(f"使用打包的Firefox: {firefox_path}")
+                                            return firefox_path
+                                    
+                                    # 开发环境
+                                    return None
+                                except Exception as e:
+                                    logging.error(f"获取浏览器路径失败：{str(e)}")
+                                return None     
+
                             # 使用 playwright 抓取信息
                             with sync_playwright() as p:
                                 browser = None
                                 try:
-                                    # 获取 Firefox 可执行文件路径
-                                    firefox_exe = os.environ.get("PLAYWRIGHT_FIREFOX_PATH")
-                                    print(f"Using Firefox executable: {firefox_exe}")
-                                    
+                                    browser = None
+                                    browser_path = get_browser_path()
+                                    print(f"浏览器路径: {browser_path}")
                                     # 启动浏览器时显式指定可执行文件路径
                                     browser = p.firefox.launch(
                                         headless=True,
-                                        executable_path=firefox_exe
+                                        executable_path = browser_path # 指定浏览器路径
                                     )
                                     page = browser.new_page()
                                     
@@ -6427,28 +6454,6 @@ if __name__ == "__main__":
     if tkdnd_path:
         os.environ['TKDND_LIBRARY'] = tkdnd_path
     
-    # 设置 Firefox 路径
-    def _discover_firefox_path():
-        """发现 Firefox 路径"""
-        if getattr(sys, 'frozen', False):
-            # 如果是打包后的可执行文件
-            base_dir = sys._MEIPASS
-            firefox_path = os.path.join(base_dir, 'playwright-browsers', 'firefox')
-            # 查找具体的 Firefox 目录
-            if os.path.exists(firefox_path):
-                for item in os.listdir(firefox_path):
-                    if item.startswith('firefox-'):
-                        full_path = os.path.join(firefox_path, item, 'firefox')
-                        if os.path.exists(full_path):
-                            return full_path
-        return None
-
-    # 设置 Firefox 路径
-    firefox_path = _discover_firefox_path()
-    if firefox_path:
-        os.environ['PLAYWRIGHT_FIREFOX_PATH'] = firefox_path
-        print(f"设置 Firefox 路径: {firefox_path}")
-
     # 创建主窗口
     root = TkinterDnD.Tk()
     

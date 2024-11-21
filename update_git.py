@@ -128,9 +128,10 @@ def push_changes():
         if success:
             print(f"成功推送到远程仓库的 {current_branch} 分支！")
             return True
+        else:
+            print(f"推送失败：\n{output}")
     
-    # 如果自动合并失败，询问是否强制推送
-    print(f"推送失败：\n{output}")
+    # 询问是否强制推送
     choice = input("\n是否要强制推送？这将覆盖远程的所有更改！(y/N): ").strip().lower()
     if choice == 'y':
         success, output = run_git_command(f'git push -f origin {current_branch}')
