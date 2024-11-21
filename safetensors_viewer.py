@@ -53,6 +53,33 @@ def get_resource_path(relative_path):
         base_path = BASE_PATH
     return os.path.join(base_path, relative_path)
 
+class FileSystemCache:
+    def __init__(self):
+        self.cache = {}
+
+    def get_file_info(self, file_path):
+        if file_path not in self.cache:
+            self.cache[file_path] = self._get_file_info(file_path)
+        return self.cache[file_path]
+
+    def _get_file_info(self, file_path):
+        try:
+            file_stat = os.stat(file_path)
+            return {
+                'size': file_stat.st_size,
+                'mtime': file_stat.st_mtime,
+                'exists': True
+            }
+        except FileNotFoundError:
+            return {
+                'size': 0,
+                'mtime': 0,
+                'exists': False
+            }
+
+    def clear_cache(self):
+        self.cache.clear()
+
 class SafetensorsViewer:
     def __init__(self, master):
         # 基础属性初始化
@@ -133,7 +160,7 @@ class SafetensorsViewer:
         # 其他属性初始化
         self.current_file = None
         self.current_subfolder = None
-        self.current_sort = 'name_asc'  # 修改默认排序方式为按名称升序
+        self.current_sort = 'name_asc'  # 设置默认排序方式
         self.current_batch = 0
         self.batch_size = 20
         self.search_after_id = None
@@ -3967,7 +3994,7 @@ v1.5.0 更新内容：
             self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
     def load_categories(self):
-        """加载���有类别并设置默认选项"""
+        """加载所有类别并设置默认选项"""
         # 获取所有文件夹
         all_dirs = [d for d in os.listdir(BASE_PATH) 
                     if os.path.isdir(os.path.join(BASE_PATH, d)) and d not in ['ui']]
@@ -4035,9 +4062,11 @@ v1.5.0 更新内容：
                         category_path = os.path.join(BASE_PATH, category)
                         self.recursive_load_all_files_to_list(category_path, category, temp_files)
                     
-                    # 加载完成后，一次性更新 all_files
+                    # 加载完成后，一次性更新 all_files，并应用默认排序
                     if not self.loading_cancelled:
                         self.all_files = list(set(temp_files))  # 使用 set 去重
+                        # 应用默认排序
+                        self.all_files = self.sort_filtered_files(self.all_files, self.current_sort)
                         # 加载完成后在主线程中更新UI
                         self.master.after(0, self.on_files_loaded)
                 except Exception as e:
@@ -4069,10 +4098,7 @@ v1.5.0 更新内容：
 
     def on_files_loaded(self):
         """文件加载完成后的处理"""
-        if hasattr(self, 'current_sort'):
-            self.all_files = self.sort_filtered_files(self.all_files, self.current_sort)
-        
-        # 刷新当前显示
+        # 刷新当前显示，使用当前排序方式
         if hasattr(self, 'category_combobox'):
             category = self.category_combobox.get()
             self.load_files(category, self.search_var.get(), self.current_sort)
@@ -4096,7 +4122,7 @@ v1.5.0 更新内容：
                 # 如果有修改，保存更新后的信息
                 if modified:
                     with open(info_file, 'w', encoding='utf-8') as f:
-                        json.dump(all_info, f, ensure_ascii=False, indent=2)  # 修复这里的 allinfo 为 all_info
+                        json.dump(all_info, f, ensure_ascii=False, indent=2)
                     logging.info("Added is_favorite field to model info")
             except Exception as e:
                 logging.error(f"Error adding favorite field to model info: {str(e)}")
@@ -4218,7 +4244,7 @@ https://pan.quark.cn/s/75450b122a53"""
         # 恢复预览图和滚动内容的显示
         if hasattr(self, 'preview_container'):
             self.preview_container.pack(pady=0, padx=0)
-        if hasattr(self, 'scrollable_frame'):
+        if hasattr(self, 'canvas'):
             self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         if hasattr(self, 'info_frame'):
             self.canvas_frame = self.info_frame.create_window((0, 0), window=self.info_frame, anchor="nw")
@@ -5345,7 +5371,7 @@ https://pan.quark.cn/s/75450b122a53"""
             target_path = os.path.join(target_dir, model_name)
             counter = 1
             while os.path.exists(target_path):
-                new_basename = f"{model_basename}(副本){counter if counter > 1 else ''}"
+                new_basename = f"{model_basename}(���本){counter if counter > 1 else ''}"
                 target_path = os.path.join(target_dir, new_basename + model_ext)
                 counter += 1
             
@@ -5383,7 +5409,7 @@ https://pan.quark.cn/s/75450b122a53"""
                     shutil.copy2(preview_path, target_preview)
                     break
             
-            # 复制适配CS生成的配文件夹（如果存在）
+            # 复制适配CS生成的配置文件夹（如果存在）
             update_status("正在复制配置文件...", 90)
             cs_folder = os.path.join(source_dir, model_basename)
             if os.path.exists(cs_folder) and os.path.isdir(cs_folder):
