@@ -523,7 +523,15 @@ class SafetensorsViewer:
 ※长期下载更新地址：https://pan.quark.cn/s/75450b122a53
 
 v{VERSION} 更新内容：
+1.增加了列表缓存机制，有效提升列表加载速度
+2.更换了体积更小浏览器内核，提升首次打开软件的速度
+3.收藏功能取消了自动刷新机制，操作更流畅
+4.增加了列表的快捷键操作
+5.将更换预览图功能转移到详情图右键快捷菜单
+6.增加了详情输入框的键入撤销功能（Ctrl+Z）
+7.其他细节优化及问题修复
 
+v1.5.0 更新内容：
 【重点优化】
 1.抓取功能全面升级
    - 内置了浏览器内核，实现更全面更稳定的抓取
@@ -1376,14 +1384,42 @@ v{VERSION} 更新内容：
         model_list_frame = ttk.LabelFrame(self.left_frame, text="模型列表", style='primary.TLabelframe')
         model_list_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
+        # 创建统计信息容器
+        stats_container = ttk.Frame(model_list_frame)
+        stats_container.pack(fill=tk.X, padx=5, pady=5)
+
         # 添加统计信息标签
         self.stats_label = ttk.Label(
-            model_list_frame,
+            stats_container,
             text="",
             font=self.base_font,
-            wraplength=350  # 设置文本自动换行宽度
+            wraplength=280  # 减小文本自动换行宽度以适应按钮
         )
-        self.stats_label.pack(fill=tk.X, padx=5, pady=5)
+        self.stats_label.pack(side=tk.LEFT)
+
+        # 添加快速滚动按钮
+        scroll_buttons_frame = ttk.Frame(stats_container)
+        scroll_buttons_frame.pack(side=tk.RIGHT)
+
+        # 滚动到顶部按钮
+        scroll_top_btn = ttk.Button(
+            scroll_buttons_frame,
+            text="顶",
+            width=3,
+            style='info.TButton',
+            command=self.scroll_to_top
+        )
+        scroll_top_btn.pack(side=tk.LEFT, padx=2)
+
+        # 滚动到底部按钮
+        scroll_bottom_btn = ttk.Button(
+            scroll_buttons_frame,
+            text="底",
+            width=3,
+            style='info.TButton',
+            command=self.scroll_to_bottom
+        )
+        scroll_bottom_btn.pack(side=tk.LEFT)
 
         # 创建容器框架
         self.canvas_container = ttk.Frame(model_list_frame)
@@ -1440,6 +1476,43 @@ v{VERSION} 更新内容：
         # 绑定鼠标滚轮事件
         self.canvas.bind("<Enter>", self._bind_mousewheel)
         self.canvas.bind("<Leave>", self._unbind_mousewheel)
+
+        # 绑定Home和End快捷键
+        self.master.bind('<Home>', lambda e: self.scroll_to_top())
+        self.master.bind('<End>', lambda e: self.scroll_to_bottom())
+        # 绑定PageUp和PageDown快捷键
+        self.master.bind('<Prior>', lambda e: self.scroll_page_up())  # PageUp
+        self.master.bind('<Next>', lambda e: self.scroll_page_down())  # PageDown
+
+    def scroll_page_up(self):
+        """向上滚动一页"""
+        # 获取当前可见区域的高度
+        visible_height = self.canvas.winfo_height()
+        # 获取当前滚动位置
+        current_pos = self.canvas.yview()[0]
+        # 计算新的滚动位置(向上滚动一个可见区域的高度)
+        new_pos = max(0, current_pos - (visible_height / self.scrollable_frame.winfo_height()))
+        # 移动到新位置
+        self.canvas.yview_moveto(new_pos)
+
+    def scroll_page_down(self):
+        """向下滚动一页"""
+        # 获取当前可见区域的高度
+        visible_height = self.canvas.winfo_height()
+        # 获取当前滚动位置
+        current_pos = self.canvas.yview()[0]
+        # 计算新的滚动位置(向下滚动一个可见区域的高度)
+        new_pos = min(1, current_pos + (visible_height / self.scrollable_frame.winfo_height()))
+        # 移动到新位置
+        self.canvas.yview_moveto(new_pos)
+
+    def scroll_to_top(self):
+        """滚动到顶部"""
+        self.canvas.yview_moveto(0)
+
+    def scroll_to_bottom(self):
+        """滚动到底部"""
+        self.canvas.yview_moveto(1)
 
     def setup_right_frame(self):
         """设置右侧框架"""
@@ -4057,10 +4130,14 @@ v{VERSION} 更新内容：
    - 搜索功能：支持搜索文件名、路径、模型类型
    - 排序方式：支持多种排序方式，如名称、修改时间等
    - 快捷键：上下方向键快速切换模型，Ctrl+F 聚焦到搜索框
+   - 快捷键：Home回到顶部，End回到底部
+   - 快捷键：PageUp向上翻页，PageDown向下翻页
    - 右键选单：右键点击模型支持多种操作模型的选单
 
 2. 模型信息管理
    - 自动保存：编辑模型信息后会自动保存
+   - 快捷键：Ctrl+Z 撤销所选输入框的修改
+   - 快捷键：Ctrl+S 手动保存模型信息
    - 描述编辑：点击"详情"按钮可在大窗口中编辑描述
    - 收藏功能：点击"收藏模型"可收藏/取消收藏
    - 移动功能：可以移动模型及相关所有配置文件到其他文件夹，并保留详情信息和收藏状态
@@ -4894,8 +4971,12 @@ https://pan.quark.cn/s/75450b122a53"""
             self.show_popup_message("请先选择一个模型文件")
             return
         
-        # 获取目标路径
-        target_dir = filedialog.askdirectory(title="选择要移动到的文件夹")
+        # 获取当前模型所在目录作为初始目录
+        current_path = os.path.join(BASE_PATH, self.current_file)
+        current_dir = os.path.dirname(current_path)
+        
+        # 获取目标路径,并使用当前目录作为初始目录
+        target_dir = filedialog.askdirectory(title="选择要移动到的文件夹", initialdir=current_dir)
         if not target_dir:
             return
         
@@ -4909,7 +4990,6 @@ https://pan.quark.cn/s/75450b122a53"""
                 is_sub_directory = False
             
             # 获取当前模型文件的路径信息
-            current_path = os.path.join(BASE_PATH, self.current_file)
             model_dir = os.path.dirname(current_path)
             model_name = os.path.basename(current_path)
             model_basename = os.path.splitext(model_name)[0]
@@ -5255,8 +5335,8 @@ https://pan.quark.cn/s/75450b122a53"""
             model_name = os.path.basename(source_path)
             model_basename, model_ext = os.path.splitext(model_name)
             
-            # 获取目标路径
-            target_dir = filedialog.askdirectory(title="选择要复制到的文件夹")
+            # 获取目标路径,并使用当前目录作为初始目录
+            target_dir = filedialog.askdirectory(title="选择要复制到的文件夹", initialdir=source_dir)
             if not target_dir:
                 progress_window.destroy()
                 return
