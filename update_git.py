@@ -67,6 +67,7 @@ def commit_changes():
         'README.md',
         'update_git.py',
         '.gitignore'
+        
     ]
     
     # 添加文件

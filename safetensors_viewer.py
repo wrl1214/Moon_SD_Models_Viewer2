@@ -4872,6 +4872,7 @@ https://pan.quark.cn/s/75450b122a53"""
                     # 如果用户同意替换预览图，且有可用的预览图
                     if replace_preview and 'images' in data and len(data['images']) > 0:
                         image_url = data['images'][0].get('url')
+                        print(image_url)
                         if image_url:
                             # 下载并设置预览图
                             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
@@ -5371,7 +5372,7 @@ https://pan.quark.cn/s/75450b122a53"""
             target_path = os.path.join(target_dir, model_name)
             counter = 1
             while os.path.exists(target_path):
-                new_basename = f"{model_basename}(���本){counter if counter > 1 else ''}"
+                new_basename = f"{model_basename}(副本){counter if counter > 1 else ''}"
                 target_path = os.path.join(target_dir, new_basename + model_ext)
                 counter += 1
             
@@ -6568,33 +6569,32 @@ https://pan.quark.cn/s/75450b122a53"""
         relative_path = os.path.dirname(self.current_file)
         preview_path = self.get_image_path(file_name, relative_path)
         
-        if not preview_path:
-            self.show_popup_message("当前模型没有预览图")
-            return
-        
         menu = tk.Menu(self.master, tearoff=0, font=self.base_font)
         menu.add_command(
             label="换预览图",
             command=self.change_preview_image,
             font=self.base_font
         )
-        menu.add_separator()
-        menu.add_command(
-            label="复制图片文件",
-            command=lambda: self.copy_preview_image(preview_path),
-            font=self.base_font
-        )
-        menu.add_command(
-            label="另存为图片文件",
-            command=lambda: self.save_preview_image_as(preview_path),
-            font=self.base_font
-        )
-        menu.add_separator()
-        menu.add_command(
-            label="删除图片文件",
-            command=lambda: self.delete_preview_image(preview_path),
-            font=self.base_font
-        )
+        
+        # 只有存在预览图时才显示其他选项
+        if preview_path:
+            menu.add_separator()
+            menu.add_command(
+                label="复制图片文件",
+                command=lambda: self.copy_preview_image(preview_path),
+                font=self.base_font
+            )
+            menu.add_command(
+                label="另存为图片文件",
+                command=lambda: self.save_preview_image_as(preview_path),
+                font=self.base_font
+            )
+            menu.add_separator()
+            menu.add_command(
+                label="删除图片文件",
+                command=lambda: self.delete_preview_image(preview_path),
+                font=self.base_font
+            )
         
         menu.post(event.x_root, event.y_root)
 
