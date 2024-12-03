@@ -214,6 +214,45 @@ def switch_branch():
     print(f"\n已切换到分支：{branch_name}")
     return True
 
+def reset_changes():
+    """取消当前更改，恢复到远程最新版本"""
+    print("\n准备恢复到远程仓库最新版本...")
+    
+    # 获取当前分支
+    success, current_branch = run_git_command("git rev-parse --abbrev-ref HEAD")
+    if not success:
+        print("获取当前分支失败")
+        return False
+    current_branch = current_branch.strip()
+    
+    # 确认操作
+    print("\n警告：此操作将丢失所有未提交的更改！")
+    choice = input("是否继续？(y/N): ").strip().lower()
+    if choice != 'y':
+        print("操作已取消")
+        return False
+    
+    # 获取远程最新状态
+    success, output = run_git_command(f'git fetch origin {current_branch}')
+    if not success:
+        print(f"获取远程更新失败：\n{output}")
+        return False
+    
+    # 强制重置到远程版本
+    success, output = run_git_command(f'git reset --hard origin/{current_branch}')
+    if not success:
+        print(f"重置失败：\n{output}")
+        return False
+    
+    # 清理未跟踪的文件
+    success, output = run_git_command('git clean -fd')
+    if not success:
+        print(f"清理未跟踪文件失败：\n{output}")
+        return False
+    
+    print("已成功恢复到远程仓库最新版本！")
+    return True
+
 def show_menu():
     """显示菜单"""
     print("\n=== Git操作菜单 ===")
@@ -222,8 +261,9 @@ def show_menu():
     print("3. 提交更改")
     print("4. 推送到远程")
     print("5. 切换分支")
+    print("6. 恢复到远程版本")
     print("0. 退出")
-    return input("请选择操作 (0-5): ").strip()
+    return input("请选择操作 (0-6): ").strip()
 
 def main():
     while True:
@@ -238,6 +278,8 @@ def main():
             push_changes()
         elif choice == "5":
             switch_branch()
+        elif choice == "6":
+            reset_changes()
         elif choice == "0":
             print("\n感谢使用！")
             break
