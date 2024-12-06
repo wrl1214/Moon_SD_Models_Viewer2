@@ -66,8 +66,8 @@ def commit_changes():
         'safetensors_viewer.py',
         'README.md',
         'update_git.py',
-        '.gitignore'
-        
+        '.gitignore',
+        'workflow_manager.py'
     ]
     
     # 添加文件

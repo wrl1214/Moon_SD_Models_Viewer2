@@ -1,10 +1,10 @@
 """
 Safetensors Viewer
-Version: 1.5.2
+Version: 1.5.3
 """
 
 # 全局常量
-VERSION = "1.5.2"
+VERSION = "1.5.3"
 APP_NAME = "月光AI宝盒-模型管理器"
 APP_TITLE = f"{APP_NAME} v{VERSION}"
 
@@ -484,6 +484,16 @@ class SafetensorsViewer:
         )
         self.model_mapping_btn.pack(pady=5, padx=5, fill=tk.X)
         
+        # 添加工作流管理按钮
+        self.workflow_btn = ttk.Button(
+            title_frame, 
+            text="工作流", 
+            command=self.show_workflow,
+            style='primary.TButton',
+            **button_style
+        )
+        self.workflow_btn.pack(pady=5, padx=5, fill=tk.X)
+        
         # 修改计算哈希按钮为一键脚本按钮
         self.batch_btn = ttk.Button(
             title_frame,
@@ -642,6 +652,42 @@ v1.5.0 更新内容：
         )
         huggingface_btn.pack(pady=5, padx=5, fill=tk.X)
 
+    def show_workflow(self):
+        """显示工作流管理界面"""
+        # 隐藏其他界面
+        self.model_management_frame.pack_forget()
+        self.model_mapping_frame.pack_forget() 
+        self.help_frame.pack_forget()
+        
+        # 导入工作流管理模块
+        try:
+            import workflow_manager
+            if not hasattr(self, 'workflow_frame'):
+                # 创建新的工作流界面
+                self.workflow_frame = workflow_manager.WorkflowManager(self.content_frame, self)
+                # 设置分隔线位置
+                self.workflow_frame.update_idletasks()
+                self.master.after(50, lambda: self.workflow_frame.paned_window.sashpos(0, 350))
+            
+            # 显示工作流界面
+            self.workflow_frame.pack(fill=tk.BOTH, expand=True)
+            
+            # 更新按钮样式
+            self.workflow_btn.configure(style='secondary.TButton')
+            self.model_management_btn.configure(style='primary.TButton')
+            self.model_mapping_btn.configure(style='primary.TButton')
+            self.help_btn.configure(style='primary.TButton')
+            
+        except Exception as e:
+            # 如果出错，清理并重试
+            if hasattr(self, 'workflow_frame'):
+                try:
+                    self.workflow_frame.destroy()
+                except:
+                    pass
+                delattr(self, 'workflow_frame')
+            self.show_popup_message(f"加载工作流管理模块失败: {str(e)}")
+            
     def show_theme_menu(self, event=None):
         """显示主题选择菜单"""
         # 创建主题菜单
@@ -1178,21 +1224,40 @@ v1.5.0 更新内容：
         """显示模型管理界面"""
         self.model_mapping_frame.pack_forget()
         self.help_frame.pack_forget()
+        if hasattr(self, 'workflow_frame'):
+            self.workflow_frame.pack_forget()
         self.model_management_frame.pack(fill=tk.BOTH, expand=True)
         
         self.model_management_btn.configure(style='secondary.TButton')
         self.model_mapping_btn.configure(style='primary.TButton')
         self.help_btn.configure(style='primary.TButton')
+        self.workflow_btn.configure(style='primary.TButton')
 
     def show_model_mapping(self):
-        """显示型映射界面"""
+        """显示模型映射界面"""
         self.model_management_frame.pack_forget()
         self.help_frame.pack_forget()
+        if hasattr(self, 'workflow_frame'):
+            self.workflow_frame.pack_forget()
         self.model_mapping_frame.pack(fill=tk.BOTH, expand=True)
         
         self.model_mapping_btn.configure(style='secondary.TButton')
         self.model_management_btn.configure(style='primary.TButton')
         self.help_btn.configure(style='primary.TButton')
+        self.workflow_btn.configure(style='primary.TButton')
+
+    def show_help(self):
+        """显示帮助界面"""
+        self.model_management_frame.pack_forget()
+        self.model_mapping_frame.pack_forget()
+        if hasattr(self, 'workflow_frame'):
+            self.workflow_frame.pack_forget()
+        self.help_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.help_btn.configure(style='secondary.TButton')
+        self.model_management_btn.configure(style='primary.TButton')
+        self.model_mapping_btn.configure(style='primary.TButton')
+        self.workflow_btn.configure(style='primary.TButton')
 
     def setup_styles(self):
         """设置自定义样式"""
@@ -4223,11 +4288,14 @@ https://pan.quark.cn/s/75450b122a53"""
         """显示帮助界面"""
         self.model_management_frame.pack_forget()
         self.model_mapping_frame.pack_forget()
+        if hasattr(self, 'workflow_frame'):
+            self.workflow_frame.pack_forget()
         self.help_frame.pack(fill=tk.BOTH, expand=True)
         
         self.help_btn.configure(style='secondary.TButton')
         self.model_management_btn.configure(style='primary.TButton')
         self.model_mapping_btn.configure(style='primary.TButton')
+        self.workflow_btn.configure(style='primary.TButton')
 
     def on_sash_drag(self, event):
         """分隔栏拖拽过程中的处理"""

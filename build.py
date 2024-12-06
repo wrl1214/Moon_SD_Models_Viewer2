@@ -106,20 +106,23 @@ def build():
         '--icon=ui/icon.ico',
         '--add-data=ui;ui',
         f'--add-data={tkdnd_path};tkdnd',
-        f'--add-data={browser_path};firefox',  # 这里会把整个 firefox-* 目录复制到 firefox 目录下
+        f'--add-data={browser_path};firefox',
         '--hidden-import=tkinter',
         '--hidden-import=tkinter.ttk',
         '--hidden-import=PIL',
+        '--hidden-import=PIL.Image',
         '--hidden-import=ttkbootstrap',
         '--hidden-import=tkinterdnd2',
         '--hidden-import=playwright',
         '--hidden-import=playwright.sync_api',
+        '--hidden-import=datetime',
         '--collect-data=tkinterdnd2',
         '--collect-data=playwright',
         '--collect-all=playwright',
         '--noconsole',
         '--onefile',
-        'safetensors_viewer.py'
+        'safetensors_viewer.py',
+        'workflow_manager.py'
     ]
     
     # 执行打包命令
