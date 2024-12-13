@@ -5,6 +5,9 @@ import os
 import shutil
 from datetime import datetime
 from PIL import Image, ImageTk
+from io import BytesIO
+import struct
+import zlib
 
 class WorkflowManager(ttk.Frame):
     def __init__(self, parent, main_app):
@@ -310,6 +313,9 @@ class WorkflowManager(ttk.Frame):
         self.preview_label.bind("<Button-1>", self.show_full_preview)
         self.preview_label.bind("<Enter>", lambda e: self.preview_label.configure(cursor="hand2"))
         self.preview_label.bind("<Leave>", lambda e: self.preview_label.configure(cursor=""))
+        
+        # 添加右键菜单绑定
+        self.preview_label.bind("<Button-3>", self.show_preview_menu)
         
         # 工作流信息区域
         info_frame = ttk.Frame(content_frame, style='Border.TFrame')
@@ -1348,10 +1354,12 @@ class WorkflowManager(ttk.Frame):
         
         old_path = self.workflows[workflow_hash]['file_path']
         old_folder = os.path.dirname(old_path)
-        new_path = os.path.join(old_folder, f"{new_name}.json")
+        # 保留原文件后缀名
+        old_ext = os.path.splitext(old_path)[1]
+        new_path = os.path.join(old_folder, f"{new_name}{old_ext}")
         
         try:
-            # 检新文件名是否已存在
+            # 检查新文件名是否已存在
             if os.path.exists(new_path) and old_path != new_path:
                 self.main_app.show_popup_message("该名称已存在，请使用其他名称")
                 return
@@ -1620,8 +1628,121 @@ class WorkflowManager(ttk.Frame):
             new_name = f"{name}_copy{ext}"
             new_path = os.path.join(os.path.dirname(workflow['file_path']), new_name)
             
-            # 复制文件
-            shutil.copy2(workflow['file_path'], new_path)
+            # 读取原文件内容
+            ext = ext.lower()
+            if ext == '.png':
+                # 如果是PNG文件，提取JSON数据
+                with open(workflow['file_path'], 'rb') as f:
+                    data = f.read()
+                json_data = self.extract_json_from_png(data)
+                if not json_data:
+                    raise ValueError("无法从PNG文件提取工作流数据")
+                
+                # 修改JSON数据
+                json_obj = json.loads(json_data)
+                # 添加复制时间戳，确保生成不同的哈希值
+                json_obj['_copy_timestamp'] = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                
+                # 如果是PNG文件，需要保留预览图
+                image = Image.open(workflow['file_path'])
+                # 保存新文件（包含修改后的JSON数据）
+                self.save_image_with_json(image, json.dumps(json_obj), new_path)
+            
+            elif ext == '.svg':
+                # 读取SVG文件内容
+                with open(workflow['file_path'], 'r', encoding='utf-8') as f:
+                    svg_content = f.read()
+                
+                # 查找JSON数据
+                start_marker = '{"last_node_id":'
+                start_pos = svg_content.find(start_marker)
+                
+                if start_pos == -1:
+                    # 尝试查找URL编码的JSON
+                    start_marker = '%7B%22last_node_id%22%3A'
+                    start_pos = svg_content.find(start_marker)
+                    if start_pos != -1:
+                        # 找到URL编码的JSON结束位置
+                        end_pos = svg_content.find('"', start_pos)
+                        if end_pos != -1:
+                            from urllib.parse import unquote
+                            encoded_data = svg_content[start_pos:end_pos]
+                            json_str = unquote(encoded_data)
+                            json_obj = json.loads(json_str)
+                    else:
+                        # 尝试查找HTML转义的JSON
+                        start_marker = '{"amp;last_node_id":'
+                        start_pos = svg_content.find(start_marker)
+                        if start_pos == -1:
+                            raise ValueError("无法从SVG文件提取工作流数据")
+                        
+                        # 解析HTML转义的JSON
+                        json_str = ''
+                        brace_count = 0
+                        i = start_pos
+                        while i < len(svg_content):
+                            char = svg_content[i]
+                            json_str += char
+                            if char == '{':
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0:
+                                    break
+                            i += 1
+                        
+                        # 处理HTML转义字符
+                        json_str = json_str.replace('&amp;', '&')
+                        json_str = json_str.replace('&quot;', '"')
+                        json_str = json_str.replace('&lt;', '<')
+                        json_str = json_str.replace('&gt;', '>')
+                        json_obj = json.loads(json_str)
+                else:
+                    # 解析普通JSON
+                    json_str = ''
+                    brace_count = 0
+                    i = start_pos
+                    while i < len(svg_content):
+                        char = svg_content[i]
+                        json_str += char
+                        if char == '{':
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                break
+                        i += 1
+                    json_obj = json.loads(json_str)
+                
+                # 添加复制时间戳
+                json_obj['_copy_timestamp'] = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                
+                # 替换原JSON数据
+                new_json_str = json.dumps(json_obj)
+                if '%7B%22last_node_id%22%3A' in svg_content:
+                    # URL编码的情况
+                    from urllib.parse import quote
+                    new_encoded_json = quote(new_json_str)
+                    new_svg_content = svg_content.replace(encoded_data, new_encoded_json)
+                else:
+                    # 普通JSON或HTML转义的情况
+                    new_svg_content = svg_content.replace(json_str, new_json_str)
+                
+                # 保存新SVG文件
+                with open(new_path, 'w', encoding='utf-8') as f:
+                    f.write(new_svg_content)
+            
+            else:
+                # JSON文件直接读取和修改
+                with open(workflow['file_path'], 'r', encoding='utf-8') as f:
+                    json_obj = json.load(f)
+                
+                # 添加复制时间戳，确保生成不同的哈希值
+                json_obj['_copy_timestamp'] = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                
+                # 保存新文件
+                with open(new_path, 'w', encoding='utf-8') as f:
+                    json.dump(json_obj, f, ensure_ascii=False, indent=2)
             
             # 重新加载工作流列表
             self.load_workflows()
@@ -2123,12 +2244,9 @@ class WorkflowManager(ttk.Frame):
                         if start_pos != -1:
                             # 将URL编码的数据解码为普通JSON
                             from urllib.parse import unquote
-                            # 从找到的位置开始截取数据
                             encoded_data = data[start_pos:].split(b'"')[0]
-                            # 解码URL编码的数据
                             json_str = unquote(encoded_data.decode('ascii'))
-                            # 验证JSON是否有效
-                            json.loads(json_str)  # 这会抛出异常如果JSON无效
+                            workflow_data = json.loads(json_str)
                         else:
                             # 再尝试查找HTML转义的JSON开始标记
                             start_marker = b'{"amp;last_node_id":'
@@ -2253,3 +2371,257 @@ class WorkflowManager(ttk.Frame):
             self.main_app.show_popup_message("请安装pyautogui库以支持自动粘贴功能")
         except Exception as e:
             self.main_app.show_popup_message(f"自动粘贴失败: {str(e)}")
+
+    def change_preview_image(self, workflow_hash):
+        """更换工作流预览图"""
+        workflow = self.workflows.get(workflow_hash)
+        if not workflow:
+            return
+        
+        from tkinter import filedialog
+        
+        # 选择新的图片文件
+        new_image_path = filedialog.askopenfilename(
+            title="选择新的预览图",
+            filetypes=[
+                ("图片文件", "*.png *.jpg *.jpeg *.webp"),
+                ("所有文件", "*.*")
+            ]
+        )
+        
+        if not new_image_path:
+            return
+        
+        try:
+            # 读取新图片
+            new_image = Image.open(new_image_path)
+            
+            # 如果不是PNG格式，转换为PNG
+            if new_image.format != 'PNG':
+                new_image = new_image.convert('RGBA')
+            
+            # 获取原工作流文件路径和类型
+            original_path = workflow['file_path']
+            is_json = original_path.lower().endswith('.json')
+            
+            if is_json:
+                # 如果是JSON文件，创建新的PNG文件
+                new_file_path = os.path.splitext(original_path)[0] + '.png'
+                
+                # 读取原JSON内容并确保格式正确
+                with open(original_path, 'r', encoding='utf-8') as f:
+                    json_data = f.read()
+                    # 验证并格式化JSON
+                    json_obj = json.loads(json_data)
+                    json_data = json.dumps(json_obj, ensure_ascii=False)
+                
+                # 将JSON数据添加到PNG文件
+                self.save_image_with_json(new_image, json_data, new_file_path)
+                
+                # 删除原JSON文件
+                os.remove(original_path)
+                
+            else:
+                # 如果是PNG文件，保留原JSON数据
+                new_file_path = original_path
+                
+                # 读取原PNG文件中的JSON数据
+                with open(original_path, 'rb') as f:
+                    data = f.read()
+                
+                # 提取JSON数据
+                json_data = self.extract_json_from_png(data)
+                if json_data:
+                    # 保存新图片并添加原JSON数据
+                    self.save_image_with_json(new_image, json_data, new_file_path)
+                else:
+                    self.main_app.show_popup_message("无法从原文件提取工作流数据")
+                    return
+            
+            # 更新工作流信息
+            workflow['file_path'] = new_file_path
+            
+            # 重新加载预览图
+            preview_image = new_image.copy()
+            workflow['list_preview'] = self.resize_preview_image(
+                preview_image,
+                self.thumbnail_size[0],
+                self.thumbnail_size[1]
+            )
+            workflow['detail_preview'] = self.resize_preview_image(
+                preview_image,
+                self.base_preview_size,
+                self.base_preview_size
+            )
+            
+            # 保存更改并刷新显示
+            self.save_workflow_info()
+            self.refresh_workflow_list()
+            self.update_workflow_detail()
+            
+            self.main_app.show_popup_message("预览图已更新")
+            
+        except Exception as e:
+            self.main_app.show_popup_message(f"更换预览图失败: {str(e)}")
+
+    def save_image_with_json(self, image, json_data, output_path):
+        """将JSON数据保存到PNG文件中，确保与ComfyUI格式兼容"""
+        try:
+            # 确保JSON数据格式正确
+            if isinstance(json_data, str):
+                try:
+                    json_obj = json.loads(json_data)
+                    json_data = json.dumps(json_obj, ensure_ascii=False, separators=(',', ':'))
+                except json.JSONDecodeError:
+                    raise ValueError("Invalid JSON data")
+
+            # 创建新的PNG文件
+            with open(output_path, 'wb') as f:
+                # 1. PNG标准文件头
+                f.write(b'\x89PNG\r\n\x1a\n')
+
+                # 2. IHDR块
+                width = image.width
+                height = image.height
+                ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
+                f.write(struct.pack('>I', 13))  # IHDR长度（固定为13）
+                f.write(b'IHDR')
+                f.write(ihdr_data)
+                f.write(struct.pack('>I', zlib.crc32(b'IHDR' + ihdr_data)))
+
+                # 3. tEXt块（工作流数据）
+                workflow_data = b'workflow' + b'\x00' + json_data.encode('utf-8')
+                f.write(struct.pack('>I', len(workflow_data)))
+                f.write(b'tEXt')
+                f.write(workflow_data)
+                f.write(struct.pack('>I', zlib.crc32(b'tEXt' + workflow_data)))
+
+                # 4. sRGB块
+                f.write(struct.pack('>I', 1))  # 长度为1
+                f.write(b'sRGB')
+                f.write(b'\x00')  # 渲染意图：知觉
+                f.write(struct.pack('>I', zlib.crc32(b'sRGB\x00')))
+
+                # 5. gAMA块
+                gama_data = struct.pack('>I', 45455)  # 标准伽马值
+                f.write(struct.pack('>I', 4))
+                f.write(b'gAMA')
+                f.write(gama_data)
+                f.write(struct.pack('>I', zlib.crc32(b'gAMA' + gama_data)))
+
+                # 6. 图像数据
+                img_byte_arr = BytesIO()
+                image.save(img_byte_arr, format='PNG')
+                img_data = img_byte_arr.getvalue()
+                
+                # 提取并写入IDAT块
+                idat_start = img_data.find(b'IDAT')
+                while idat_start != -1:
+                    length_bytes = img_data[idat_start-4:idat_start]
+                    length = struct.unpack('>I', length_bytes)[0]
+                    chunk_end = idat_start + 4 + length + 4
+                    f.write(img_data[idat_start-4:chunk_end])
+                    idat_start = img_data.find(b'IDAT', chunk_end)
+
+                # 7. IEND块
+                f.write(struct.pack('>I', 0))
+                f.write(b'IEND')
+                f.write(struct.pack('>I', zlib.crc32(b'IEND')))
+
+        except Exception as e:
+            raise Exception(f"保存工作流失败: {str(e)}")
+
+    def extract_json_from_png(self, data):
+        """从PNG文件中提取JSON数据"""
+        try:
+            # 查找tEXt块中的workflow数据
+            text_pos = data.find(b'tEXtworkflow\x00')
+            if text_pos != -1:
+                # 找到workflow数据的开始位置
+                json_start = text_pos + len(b'tEXtworkflow\x00')
+                # 找到下一个PNG块的开始
+                next_chunk = data.find(b'sRGB', json_start)
+                if next_chunk != -1:
+                    json_data = data[json_start:next_chunk-8].strip()
+                    try:
+                        json_str = json_data.decode('utf-8')
+                        json.loads(json_str)  # 验证JSON
+                        return json_str
+                    except:
+                        return None
+            return None
+        except Exception:
+            return None
+
+    def show_preview_menu(self, event):
+        """显示预览图右键菜单"""
+        if not self.current_workflow:
+            return
+        
+        menu = tk.Menu(self, tearoff=0, font=self.base_font)
+        
+        # 添加菜单项
+        menu.add_command(
+            label="更换预览图",
+            command=lambda: self.change_preview_image(self.current_workflow['hash'])
+        )
+        menu.add_command(
+            label="删除预览图",
+            command=self.remove_preview_image
+        )
+        
+        # 显示菜单
+        menu.post(event.x_root, event.y_root)
+
+    def remove_preview_image(self):
+        """删除预览图，将PNG工作流转换为JSON工作流"""
+        if not self.current_workflow:
+            return
+        
+        workflow_path = self.current_workflow['file_path']
+        if not workflow_path.lower().endswith('.png'):
+            self.main_app.show_popup_message("当前工作流不是PNG格式")
+            return
+        
+        try:
+            # 读取PNG文件中的JSON数据
+            with open(workflow_path, 'rb') as f:
+                data = f.read()
+            
+            # 提取JSON数据
+            json_data = self.extract_json_from_png(data)
+            if not json_data:
+                self.main_app.show_popup_message("无法从文件中提取工作流数据")
+                return
+            
+            # 创建新的JSON文件路径
+            new_file_path = os.path.splitext(workflow_path)[0] + '.json'
+            
+            # 保存JSON文件
+            with open(new_file_path, 'w', encoding='utf-8') as f:
+                # 格式化JSON数据
+                json_obj = json.loads(json_data)
+                json.dump(json_obj, f, ensure_ascii=False, indent=2)
+            
+            # 删除原PNG文件
+            os.remove(workflow_path)
+            
+            # 更新工作流信息
+            workflow_hash = self.current_workflow['hash']
+            self.workflows[workflow_hash]['file_path'] = new_file_path
+            
+            # 使用默认预览图
+            if self.list_preview:
+                self.workflows[workflow_hash]['list_preview'] = self.list_preview
+            if self.default_preview:
+                self.workflows[workflow_hash]['detail_preview'] = self.default_preview
+            
+            # 保存更改并刷新显示
+            self.save_workflow_info()
+            self.refresh_workflow_list()
+            self.update_workflow_detail()
+            
+            self.main_app.show_popup_message("预览图已删除，工作流已转换为JSON格式")
+            
+        except Exception as e:
+            self.main_app.show_popup_message(f"删除预览图失败: {str(e)}")
