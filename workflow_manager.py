@@ -8,6 +8,12 @@ from PIL import Image, ImageTk
 from io import BytesIO
 import struct
 import zlib
+import tempfile
+from PIL import ImageGrab
+import logging
+from tkinter import filedialog
+from tkinter import dnd
+from tkinterdnd2 import DND_FILES, TkinterDnD
 
 class WorkflowManager(ttk.Frame):
     def __init__(self, parent, main_app):
@@ -64,12 +70,19 @@ class WorkflowManager(ttk.Frame):
         # 添加搜索定时器
         self.search_timer = None
         
+        # 添加对粘贴事件的绑定
+        self.bind_all('<Control-v>', self.handle_paste)
+        self.setup_drag_and_drop()
+        
         self.setup_ui()
         self.load_workflows()
         
         # 绑定上下键
         self.bind_all("<Up>", self.select_previous_workflow)
         self.bind_all("<Down>", self.select_next_workflow)
+        
+        # 设置默认排序方式
+        self.current_sort = 'name_asc'
 
     def setup_ui(self):
         """设置界面"""
@@ -182,7 +195,7 @@ class WorkflowManager(ttk.Frame):
             text="排序",
             width=6,  # 与刷新按钮相同的宽度
             style='info.TButton',
-            command=lambda: None  # 暂时不实现功能
+            command=lambda: self.show_sort_menu()
         ).pack(side=tk.LEFT, padx=(5, 0))
         
         # 排序按钮区域
@@ -986,10 +999,13 @@ class WorkflowManager(ttk.Frame):
         # 获取详情的最后修改时间
         detail_mtime = self.current_workflow.get('last_modified', self.current_workflow['created_date'])
         
+        # 获取文件格式（后缀名）
+        file_format = os.path.splitext(self.current_workflow['file_path'])[1].lstrip('.')
+        
         # 更新基础信息显示
         self.workflow_info.configure(state='normal')
         self.workflow_info.delete(0, tk.END)
-        self.workflow_info.insert(0, f"详情修改: {detail_mtime} | 文件修改: {file_mtime}")
+        self.workflow_info.insert(0, f"文件格式: {file_format}|详情修改: {detail_mtime}|文件修改: {file_mtime}")
         self.workflow_info.configure(state='readonly')
         
         # 更新哈希值
@@ -1580,11 +1596,12 @@ class WorkflowManager(ttk.Frame):
         if not workflow:
             return
         
-        # 创建文件夹选择对话框
+        # 创建文件夹选择对话框，使用工作流当前所在路径作为初始目录
         from tkinter import filedialog
+        current_dir = os.path.dirname(workflow['file_path'])
         new_path = filedialog.askdirectory(
             title="选择目标文件夹",
-            initialdir=self.workflow_dir
+            initialdir=current_dir
         )
         
         if not new_path:
@@ -1600,12 +1617,23 @@ class WorkflowManager(ttk.Frame):
                 self.main_app.show_popup_message("目标位置已存在同名文件")
                 return
             
+            # 保存原有信息
+            original_info = {
+                'description': workflow.get('description', ''),
+                'type': workflow.get('type', ''),
+                'url': workflow.get('url', ''),
+                'is_favorite': workflow.get('is_favorite', False)
+            }
+            
             # 移动文件
             shutil.move(workflow['file_path'], new_file_path)
             
             # 更新工作流信息
             workflow['file_path'] = new_file_path
             workflow['folder'] = os.path.relpath(new_path, self.workflow_dir) if new_path != self.workflow_dir else ""
+            
+            # 恢复原有信息
+            workflow.update(original_info)
             
             # 保存更改并刷新显示
             self.save_workflow_info()
@@ -1622,6 +1650,14 @@ class WorkflowManager(ttk.Frame):
             return
         
         try:
+            # 保存原有信息
+            original_info = {
+                'description': workflow.get('description', ''),
+                'type': workflow.get('type', ''),
+                'url': workflow.get('url', ''),
+                'is_favorite': workflow.get('is_favorite', False)
+            }
+            
             # 构建新的文件名
             file_name = os.path.basename(workflow['file_path'])
             name, ext = os.path.splitext(file_name)
@@ -1746,6 +1782,13 @@ class WorkflowManager(ttk.Frame):
             
             # 重新加载工作流列表
             self.load_workflows()
+            
+            # 在加载完成后，为新文件添加原有信息
+            new_hash = self.calculate_workflow_hash(new_path)
+            if new_hash in self.workflows:
+                self.workflows[new_hash].update(original_info)
+                self.save_workflow_info()
+            
             self.main_app.show_popup_message("工作流已复制")
             
         except Exception as e:
@@ -2372,29 +2415,85 @@ class WorkflowManager(ttk.Frame):
         except Exception as e:
             self.main_app.show_popup_message(f"自动粘贴失败: {str(e)}")
 
-    def change_preview_image(self, workflow_hash):
+    def handle_paste(self, event=None):
+        """处理粘贴事件"""
+        if not self.current_workflow:
+            self.main_app.show_popup_message("请先选择一个工作流")
+            return "break"
+        
+        try:
+            # 尝试获取剪贴板中的图片
+            image = ImageGrab.grabclipboard()
+            
+            if isinstance(image, Image.Image):
+                try:
+                    # 确保图片数据完整性
+                    # 创建新的图片对象，强制转换为RGBA模式
+                    processed_image = Image.new('RGBA', image.size, (255, 255, 255, 0))
+                    processed_image.paste(image, (0, 0))
+                    
+                    # 询问用户是否替换
+                    if messagebox.askyesno("确认", "是否要使用剪贴板中的图片替换当前预览图？"):
+                        self.change_preview_image(self.current_workflow['hash'], pasted_image=processed_image)
+                except Exception as e:
+                    self.main_app.show_popup_message(f"处理剪贴板图片失败：{str(e)}")
+                return "break"
+            
+            elif isinstance(image, list) and len(image) > 0:
+                # 检查是否为图片文件路径
+                file_path = image[0]
+                if os.path.isfile(file_path) and file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                    try:
+                        # 打开图片文件并确保正确处理
+                        with Image.open(file_path) as img:
+                            # 创建新的图片对象，确保正确的颜色模式
+                            processed_image = Image.new('RGBA', img.size, (255, 255, 255, 0))
+                            if img.mode == 'RGBA':
+                                processed_image.paste(img, (0, 0), img)
+                            else:
+                                # 如果不是RGBA模式，先转换
+                                converted_img = img.convert('RGBA')
+                                processed_image.paste(converted_img, (0, 0))
+                                
+                            if messagebox.askyesno("确认", "是否要使用剪贴板中的图片文件替换当前预览图？"):
+                                self.change_preview_image(self.current_workflow['hash'], pasted_image=processed_image)
+                    except Exception as e:
+                        self.main_app.show_popup_message(f"打开图片文件失败：{str(e)}")
+                return "break"
+            
+            # 如果不是图片相关内容，允许默认粘贴行为
+            return None
+            
+        except Exception as e:
+            self.main_app.show_popup_message(f"粘贴图片时发生错误：{str(e)}")
+            return "break"
+
+    def change_preview_image(self, workflow_hash, pasted_image=None):
         """更换工作流预览图"""
         workflow = self.workflows.get(workflow_hash)
         if not workflow:
             return
         
-        from tkinter import filedialog
-        
-        # 选择新的图片文件
-        new_image_path = filedialog.askopenfilename(
-            title="选择新的预览图",
-            filetypes=[
-                ("图片文件", "*.png *.jpg *.jpeg *.webp"),
-                ("所有文件", "*.*")
-            ]
-        )
-        
-        if not new_image_path:
-            return
-        
         try:
-            # 读取新图片
-            new_image = Image.open(new_image_path)
+            if pasted_image:
+                # 如果有传入的图片，直接使用
+                new_image = pasted_image
+            else:
+                # 否则打开文件选择对话框
+                from tkinter import filedialog
+                new_image_path = filedialog.askopenfilename(
+                    title="选择新的预览图",
+                    filetypes=[
+                        ("图片文件", "*.png *.jpg *.jpeg *.webp"),
+                        ("所有文件", "*.*")
+                    ]
+                )
+                
+                if not new_image_path:
+                    return
+                
+                # 读取新图片
+                new_image = Image.open(new_image_path)
             
             # 如果不是PNG格式，转换为PNG
             if new_image.format != 'PNG':
@@ -2402,27 +2501,99 @@ class WorkflowManager(ttk.Frame):
             
             # 获取原工作流文件路径和类型
             original_path = workflow['file_path']
-            is_json = original_path.lower().endswith('.json')
+            file_ext = original_path.lower()
             
-            if is_json:
-                # 如果是JSON文件，创建新的PNG文件
+            if file_ext.endswith('.svg'):
+                try:
+                    # 从SVG中提取JSON数据
+                    with open(original_path, 'r', encoding='utf-8') as f:
+                        svg_content = f.read()
+                    
+                    # 查找JSON数据
+                    start_marker = '{"last_node_id":'
+                    start_pos = svg_content.find(start_marker)
+                    
+                    if start_pos == -1:
+                        # 尝试查找URL编码的JSON
+                        start_marker = '%7B%22last_node_id%22%3A'
+                        start_pos = svg_content.find(start_marker)
+                        if start_pos != -1:
+                            # 解码URL编码的JSON
+                            from urllib.parse import unquote
+                            encoded_data = svg_content[start_pos:].split('"')[0]
+                            json_str = unquote(encoded_data)
+                        else:
+                            raise ValueError("无法在SVG中找到工作流数据")
+                    else:
+                        # 提取JSON数据
+                        json_content = ''
+                        brace_count = 0
+                        in_quotes = False
+                        escape_next = False
+                        
+                        for i in range(start_pos, len(svg_content)):
+                            char = svg_content[i]
+                            json_content += char
+                            
+                            if escape_next:
+                                escape_next = False
+                                continue
+                            
+                            if char == '\\':
+                                escape_next = True
+                            elif char == '"' and not escape_next:
+                                in_quotes = not in_quotes
+                            elif not in_quotes:
+                                if char == '{':
+                                    brace_count += 1
+                                elif char == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        break
+                        
+                        json_str = json_content
+                    
+                    # 验证JSON数据
+                    json_obj = json.loads(json_str)
+                    json_str = json.dumps(json_obj, ensure_ascii=False)
+                    
+                    # 创建新的PNG文件路径
+                    new_file_path = os.path.splitext(original_path)[0] + '.png'
+                    
+                    # 保存新的PNG文件
+                    self.save_image_with_json(new_image, json_str, new_file_path)
+                    
+                    # 删除原SVG文件
+                    os.remove(original_path)
+                    
+                    # 更新工作流信息
+                    workflow['file_path'] = new_file_path
+                    
+                except Exception as e:
+                    self.main_app.show_popup_message(f"处理SVG文件失败: {str(e)}")
+                    return
+                    
+            elif file_ext.endswith('.json'):
+                # JSON文件的处理逻辑保持不变
                 new_file_path = os.path.splitext(original_path)[0] + '.png'
                 
                 # 读取原JSON内容并确保格式正确
                 with open(original_path, 'r', encoding='utf-8') as f:
                     json_data = f.read()
-                    # 验证并格式化JSON
                     json_obj = json.loads(json_data)
                     json_data = json.dumps(json_obj, ensure_ascii=False)
                 
-                # 将JSON数据添加到PNG文件
+                # 保存新的PNG文件
                 self.save_image_with_json(new_image, json_data, new_file_path)
                 
                 # 删除原JSON文件
                 os.remove(original_path)
                 
+                # 更新工作流信息
+                workflow['file_path'] = new_file_path
+                
             else:
-                # 如果是PNG文件，保留原JSON数据
+                # PNG文件的处理逻辑保持不变
                 new_file_path = original_path
                 
                 # 读取原PNG文件中的JSON数据
@@ -2438,10 +2609,7 @@ class WorkflowManager(ttk.Frame):
                     self.main_app.show_popup_message("无法从原文件提取工作流数据")
                     return
             
-            # 更新工作流信息
-            workflow['file_path'] = new_file_path
-            
-            # 重新加载预览图
+            # 更新预览图
             preview_image = new_image.copy()
             workflow['list_preview'] = self.resize_preview_image(
                 preview_image,
@@ -2462,7 +2630,7 @@ class WorkflowManager(ttk.Frame):
             self.main_app.show_popup_message("预览图已更新")
             
         except Exception as e:
-            self.main_app.show_popup_message(f"更换预览图失败: {str(e)}")
+            self.main_app.show_popup_message(f"更换预览图失败：{str(e)}")
 
     def save_image_with_json(self, image, json_data, output_path):
         """将JSON数据保存到PNG文件中，确保与ComfyUI格式兼容"""
@@ -2625,3 +2793,146 @@ class WorkflowManager(ttk.Frame):
             
         except Exception as e:
             self.main_app.show_popup_message(f"删除预览图失败: {str(e)}")
+
+    def setup_drag_and_drop(self):
+        """设置拖放功能"""
+        # 为整个工作流管理器窗口注册拖放功能
+        self.drop_target_register(DND_FILES)
+        self.dnd_bind('<<Drop>>', self.handle_drop)
+        
+        # 为所有子框架注册拖放功能
+        for child in self.winfo_children():
+            if isinstance(child, (tk.Frame, ttk.Frame)):
+                child.drop_target_register(DND_FILES)
+                child.dnd_bind('<<Drop>>', self.handle_drop)
+
+    def handle_drop(self, event):
+        """处理拖放事件"""
+        if not self.current_workflow:
+            self.main_app.show_popup_message("请先选择一个工作流")
+            return "break"
+        
+        try:
+            # 获取拖放的文件路径并规范化
+            file_path = event.data.strip('"{}')  # 移除可能的引号和大括号
+            file_path = os.path.normpath(file_path)  # 规范化路径
+            
+            logging.debug(f"Processing dropped file: {file_path}")
+            
+            # 检查是否为图片文件
+            if os.path.isfile(file_path) and file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                if messagebox.askyesno("确认", "是否要使用拖入的图片替换当前预览图？"):
+                    try:
+                        # 打开图片文件并确保正确处理
+                        with Image.open(file_path) as img:
+                            # 创建新的图片对象，确保正确的颜色模式
+                            processed_image = Image.new('RGBA', img.size, (255, 255, 255, 0))
+                            if img.mode == 'RGBA':
+                                processed_image.paste(img, (0, 0), img)
+                            else:
+                                # 如果不是RGBA模式，先转换
+                                converted_img = img.convert('RGBA')
+                                processed_image.paste(converted_img, (0, 0))
+                            
+                            self.change_preview_image(self.current_workflow['hash'], pasted_image=processed_image)
+                    except Exception as e:
+                        logging.error(f"Error processing image file: {str(e)}")
+                        self.main_app.show_popup_message(f"处理图片文件失败：{str(e)}")
+            else:
+                self.main_app.show_popup_message("请拖入支持的图片文件（PNG、JPG、JPEG、WEBP）")
+            
+        except Exception as e:
+            logging.error(f"Drop event error: {str(e)}")
+            self.main_app.show_popup_message(f"处理拖放事件时发生错误：{str(e)}")
+        
+        return "break"
+
+    def show_sort_menu(self, event=None):
+        """显示排序菜单"""
+        menu = tk.Menu(self, tearoff=0, font=self.base_font)
+        
+        # 获取当前排序方式
+        current_sort = getattr(self, 'current_sort', 'name_asc')
+        
+        # 添加排序选项
+        menu.add_command(
+            label="✓ 按名称升序" if current_sort == 'name_asc' else "按名称升序",
+            command=lambda: self.sort_workflows('name_asc')
+        )
+        menu.add_command(
+            label="✓ 按名称降序" if current_sort == 'name_desc' else "按名称降序",
+            command=lambda: self.sort_workflows('name_desc')
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="✓ 按文件修改最晚" if current_sort == 'date_desc' else "按文件修改最晚",
+            command=lambda: self.sort_workflows('date_desc')
+        )
+        menu.add_command(
+            label="✓ 按文件修改最早" if current_sort == 'date_asc' else "按文件修改最早",
+            command=lambda: self.sort_workflows('date_asc')
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="✓ 按工作流格式" if current_sort == 'format' else "按工作流格式",
+            command=lambda: self.sort_workflows('format')
+        )
+        
+        # 获取排序按钮的位置
+        button = event.widget if event else self.winfo_containing(self.winfo_pointerx(), self.winfo_pointery())
+        x = button.winfo_rootx()
+        y = button.winfo_rooty() + button.winfo_height()
+        menu.post(x, y)
+
+    def sort_workflows(self, sort_method=None):
+        """切换排序方式"""
+        try:
+            # 保存当前排序方式
+            if sort_method:
+                self.current_sort = sort_method
+            
+            # 获取所有工作流
+            workflows = list(self.workflows.values())
+            
+            # 根据排序方式进行排序
+            if self.current_sort == 'name_asc':
+                workflows.sort(key=lambda x: x['name'].lower())
+            elif self.current_sort == 'name_desc':
+                workflows.sort(key=lambda x: x['name'].lower(), reverse=True)
+            elif self.current_sort == 'date_desc':
+                workflows.sort(key=lambda x: os.path.getmtime(x['file_path']), reverse=True)
+            elif self.current_sort == 'date_asc':
+                workflows.sort(key=lambda x: os.path.getmtime(x['file_path']))
+            elif self.current_sort == 'info_modified_desc':
+                workflows.sort(key=lambda x: x.get('update_time', 0), reverse=True)
+            elif self.current_sort == 'format':
+                # 按文件格式排序（PNG > JSON > SVG）
+                format_priority = {'png': 0, 'json': 1, 'svg': 2}
+                workflows.sort(key=lambda x: (
+                    format_priority.get(os.path.splitext(x['file_path'])[1].lower().lstrip('.'), 999),
+                    x['name'].lower()
+                ))
+            
+            # 保存当前选中的工作流
+            current_hash = self.current_workflow['hash'] if self.current_workflow else None
+            
+            # 重新构建排序后的工作流字典
+            sorted_workflows = {}
+            for workflow in workflows:
+                sorted_workflows[workflow['hash']] = workflow
+            
+            # 临时保存原始工作流字典
+            original_workflows = self.workflows
+            # 更新为排序后的工作流字典
+            self.workflows = sorted_workflows
+            
+            # 刷新工作流列表显示
+            self.refresh_workflow_list()
+            
+            # 如果有之前选中的工作流，重新选中它
+            if current_hash and current_hash in self.workflows:
+                self.select_workflow(current_hash)
+            
+        except Exception as e:
+            logging.error(f"排序工作流时发生错误: {str(e)}")
+            self.main_app.show_popup_message(f"排序工作流失败：{str(e)}")

@@ -1,10 +1,10 @@
 """
 Safetensors Viewer
-Version: 1.5.3
+Version: 1.6.0
 """
 
 # 全局常量
-VERSION = "1.5.3"
+VERSION = "1.6.0"
 APP_NAME = "月光AI宝盒-模型管理器"
 APP_TITLE = f"{APP_NAME} v{VERSION}"
 
@@ -560,42 +560,22 @@ class SafetensorsViewer:
 ※长期下载更新地址：https://pan.quark.cn/s/75450b122a53
 
 v{VERSION} 更新内容：
-1.增加了列表缓存机制，有效提升列表加载速度
-2.更换了体积更小浏览器内核，提升首次打开软件的速度
-3.收藏功能取消了自动刷新机制，操作更流畅
-4.增加了列表的快捷键操作
-5.将更换预览图功能转移到详情图右键快捷菜单
-6.增加了详情输入框的键入撤销功能（Ctrl+Z）
-7.其他细节优化及问题修复
-
-v1.5.0 更新内容：
-【重点优化】
-1.抓取功能全面升级
-   - 内置了浏览器内核，实现更全面更稳定的抓取
-   - Liblib抓取实现一键全信息抓取（需要手动填写网址）
-   - Civitai抓取更稳定，抓取的描述格式进一步优化
-
-2. 全面优化交互界面
-   - 增加了自定义字体切换及大小调整
-   - 预览图点击可以放大查看全尺寸图片
-   - 列表区右键可以显示选单，支持更多操作
-   - 详情区输入框右键可以显示选单，支持复制、粘贴、清空等操作
-   - 增加了列表区当前类别下的模型总数和总大小统计
-   - 排序中增加了多种排序方式，方便手动筛选无信息模型
-   - 详情中增加了基础信息的显示
-
-3. 全新的一键脚本功能
-   - 新增"一键从Liblib抓取"功能
-   - 新增"一键从Civitai抓取"功能
-   - 新增"一键生成Custom Scripts配置文件"功能
-   - 新增"一键生成SD WebUI可识别配置文件"功能
-
-
+【新增功能】
+工作流管理
+   - 首次打开会在软件所在目录创建my_workflows文件夹，可以将工作流统一放在该文件夹下，方便管理，也可以通过更改根目录选择自定义的工作流文件夹
+   - 目前仅支持json、png、svg三种文件格式，其他格式暂不支持
+   - 工作流选择逻辑与模型选择逻辑一致，支持搜索、快速筛选、排序等功能
+   - 支持工作流收藏功能，可通过右键选单"收藏工作流"进行收藏/取消收藏，也可在详情页下方的"收藏"按钮进行收藏/取消收藏
+   - 支持工作流的移动、复制（保留详情信息和收藏状态）、删除功能
+   - 详情支持自动保存，信息将会存储在软件所在文件夹下workflow_info.json文件中
+   - 支持一键“复制json”信息，在ComfyUI界面中使用Ctrl+V粘贴即可打开工作流
+   - ”在网页打开“功能目前并不完善，点击后会打开127.0.0.1:8188（目前无法修改），等待5秒后，模拟按下Ctrl+V，根据不同电脑环境可能会失效，建议直接使用复制json信息手动粘贴
+   - 支持右键详情图、拖拽本地图片、复制图片（网页、本地均支持）后按Ctrl+V三种更换预览图方式
+   - 更换预览图会将原有的json或者svg文件删除，替换为png格式的工作流（文件中保留json信息），如果需要恢复，可右键预览图选择“删除预览图”，即可恢复为json格式
+   - 点击预览图可放大查看全尺寸图片，支持滚轮缩放，支持拖拽移动
 【问题修复】
-1. 全面优化了高DPI下UI的显示效果（建议不要超过175%）
-2. 修复了gguf模型无法识别的问题
-3.重新设计了UI自适应逻辑，使得界面不容易出现按钮被遮挡的情况
-4.其他功能及显示bug修复
+修复部分已知Bug 
+
 
 ※Bug提交网址：https://odopqev8le.feishu.cn/share/base/form/shrcnXRZoJWjH3Ab8jV4CExIPze
 
@@ -3214,11 +3194,19 @@ v1.5.0 更新内容：
         self.master.dnd_bind('<<Drop>>', self.handle_drop)
 
     def handle_drop(self, event):
-        data = event.data
+        """处理拖放事件"""
+        # 如果当前显示的是工作流界面，不处理拖放事件
+        if hasattr(self, 'workflow_frame') and self.workflow_frame.winfo_ismapped():
+            return None
+        
+        # 获取拖放的文件路径并规范化
+        data = event.data.strip('"{}')  # 移除可能的引号和大括号
+        data = os.path.normpath(data)  # 规范化路径
+        
         logging.debug(f"Received drop event with data: {data}")
         
         if self.current_file:
-            if messagebox.askyesno("确认", "是否需要替换换预览图？"):
+            if messagebox.askyesno("确认", "是否需要替换预览图？"):
                 if data.startswith('http://') or data.startswith('https://'):
                     # 直接处理 URL
                     self.replace_preview_image_from_url(data)
@@ -3227,10 +3215,8 @@ v1.5.0 更新内容：
                     try:
                         drop_data = json.loads(data)
                         if isinstance(drop_data, list) and len(drop_data) > 0:
-                            # Edge 浏览器可能会传递一个列表
                             url = drop_data[0].get('url', '')
                         elif isinstance(drop_data, dict):
-                            # 他浏览器可能传递一个字典
                             url = drop_data.get('url', '') or drop_data.get('text/uri-list', '') or drop_data.get('text/plain', '')
                         else:
                             url = ''
@@ -3238,15 +3224,23 @@ v1.5.0 更新内容：
                         if url:
                             self.replace_preview_image_from_url(url)
                         else:
-                            self.show_popup_message("无识别拖入的图片")
+                            self.show_popup_message("无法识别拖入的图片")
                     except json.JSONDecodeError:
-                        # 如果不是 JSON，可能是本地文径
-                        self.replace_preview_image(data)
+                        # 如果不是 JSON，可能是本地文件路径
+                        try:
+                            self.replace_preview_image(data)
+                        except Exception as e:
+                            logging.error(f"Error replacing preview image: {str(e)}")
+                            self.show_popup_message(f"替换预览图失败：{str(e)}")
                 else:
-                    # 假设本地文件路径
-                    self.replace_preview_image(data)
+                    # 假设是本地文件路径
+                    try:
+                        self.replace_preview_image(data)
+                    except Exception as e:
+                        logging.error(f"Error replacing preview image: {str(e)}")
+                        self.show_popup_message(f"替换预览图失败：{str(e)}")
         else:
-            self.show_popup_message("请先选择个模型文件")
+            self.show_popup_message("请先选择一个模型文件")
 
     def replace_preview_image_from_url(self, url):
         logging.debug(f"Attempting to replace preview image from URL: {url}")
@@ -4263,6 +4257,20 @@ v1.5.0 更新内容：
 6. 模型映射（支持三种方式）
    - ComfyUI：配置 extra_model_paths.yaml，实现外部模型文件在ComfyUI中读取
    - SD WebUI：配置 webui-user.bat，实现外部模型文件在SD WebUI中读取
+
+7. 工作流管理
+   - 首次打开会在软件所在目录创建my_workflows文件夹，可以将工作流统一放在该文件夹下，方便管理，也可以通过更改根目录选择自定义的工作流文件夹
+   - 目前仅支持json、png、svg三种文件格式，其他格式暂不支持
+   - 工作流选择逻辑与模型选择逻辑一致，支持搜索、快速筛选、排序等功能
+   - 支持工作流收藏功能，可通过右键选单"收藏工作流"进行收藏/取消收藏，也可在详情页下方的"收藏"按钮进行收藏/取消收藏
+   - 支持工作流的移动、复制（保留详情信息和收藏状态）、删除功能
+   - 详情支持自动保存，信息将会存储在软件所在文件夹下workflow_info.json文件中
+   - 支持一键“复制json”信息，在ComfyUI界面中使用Ctrl+V粘贴即可打开工作流
+   - ”在网页打开“功能目前并不完善，点击后会打开127.0.0.1:8188（目前无法修改），等待5秒后，模拟按下Ctrl+V，根据不同电脑环境可能会失效，建议直接使用复制json信息手动粘贴
+   - 支持右键详情图、拖拽本地图片、复制图片（网页、本地均支持）后按Ctrl+V三种更换预览图方式
+   - 更换预览图会将原有的json或者svg文件删除，替换为png格式的工作流（文件中保留json信息），如果需要恢复，可右键预览图选择“删除预览图”，即可恢复为json格式
+   - 点击预览图可放大查看全尺寸图片，支持滚轮缩放，支持拖拽移动
+
 
 【使用建议】
 1. 软件可以直接放在ComfyUI的models文件夹下使用（无需映射），也可以在外部按照ComfyUI的models文件目录结构新建文件夹，将软件放入其中使用（需要映射）
