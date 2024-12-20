@@ -14,6 +14,7 @@ import logging
 from tkinter import filedialog
 from tkinter import dnd
 from tkinterdnd2 import DND_FILES, TkinterDnD
+from safetensors_viewer import get_resource_path
 
 class WorkflowManager(ttk.Frame):
     def __init__(self, parent, main_app):
@@ -56,7 +57,7 @@ class WorkflowManager(ttk.Frame):
         # 加载收藏图标
         self.favorite_icon = None
         try:
-            favorite_image = Image.open(os.path.join('ui', 'favorite.png'))
+            favorite_image = Image.open(get_resource_path('ui/favorite.png'))
             if favorite_image.mode != 'RGBA':
                 favorite_image = favorite_image.convert('RGBA')
             # 调整收藏图标大小为缩略图的1/3
@@ -1230,16 +1231,22 @@ class WorkflowManager(ttk.Frame):
     def load_default_preview(self):
         """加载默认预览图"""
         try:
-            # 使用 ui/null.png 作为默认预览图
-            image_path = os.path.join('ui', 'null.png')
-            if os.path.exists(image_path):
-                image = Image.open(image_path)
-                # 列表预览图尺寸
-                self.list_preview = self.resize_preview_image(image, self.thumbnail_size[0], self.thumbnail_size[1])
-                # 详情预览图尺寸
-                self.default_preview = self.resize_preview_image(image, self.base_preview_size, self.base_preview_size)
+            # 使用 get_resource_path 获取默认预览图路径
+            image_path = get_resource_path('ui/null.png')
+            
+            if not os.path.exists(image_path):
+                logging.error(f"默认预览图不存在: {image_path}")
+                return
+            
+            # 加载并调整预览图大小
+            image = Image.open(image_path)
+            # 列表预览图尺寸
+            self.list_preview = self.resize_preview_image(image, self.thumbnail_size[0], self.thumbnail_size[1])
+            # 详情预览图尺寸
+            self.default_preview = self.resize_preview_image(image, self.base_preview_size, self.base_preview_size)
+            
         except Exception as e:
-            print(f"加载默认预览图失败: {str(e)}")
+            logging.error(f"加载默认预览图失败: {str(e)}")
             self.list_preview = None
             self.default_preview = None
 
